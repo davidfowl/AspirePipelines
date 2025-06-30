@@ -2,6 +2,8 @@
 
 Deploy .NET Aspire applications to remote hosts via SSH with a single command. This sample demonstrates future deployment pipeline patterns for Aspire.
 
+https://github.com/user-attachments/assets/d7bab501-f043-4058-a188-ccd1e0096a05
+
 ## Usage
 
 ### Install the Aspire CLI
