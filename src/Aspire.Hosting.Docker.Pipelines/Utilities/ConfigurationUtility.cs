@@ -7,23 +7,21 @@ internal static class ConfigurationUtility
 {
     public static DockerSSHConfiguration GetConfigurationDefaults(IConfiguration configuration)
     {
-        var config = new DockerSSHConfiguration();
-
-        if (configuration != null)
+        var config = new DockerSSHConfiguration
         {
             // Try to read from configuration with Docker SSH specific prefix
-            config.SshHost = configuration["DockerSSH:Host"];
-            config.SshUsername = configuration["DockerSSH:Username"];
-            config.SshPort = configuration["DockerSSH:Port"] ?? "22";
-            config.RemoteDeployPath = configuration["DockerSSH:DeployPath"];
-            config.RegistryUrl = configuration["DockerSSH:Registry:Url"] ?? "docker.io";
-            config.RegistryUsername = configuration["DockerSSH:Registry:Username"];
-            config.RepositoryPrefix = configuration["DockerSSH:Registry:RepositoryPrefix"];
+            SshHost = configuration["DockerSSH:SshHost"],
+            SshUsername = configuration["DockerSSH:SshUsername"],
+            SshPort = configuration["DockerSSH:SshPort"] ?? "22",
+            RemoteDeployPath = configuration["DockerSSH:RemoteDeployPath"],
+            RegistryUrl = configuration["DockerSSH:RegistryUrl"] ?? "docker.io",
+            RegistryUsername = configuration["DockerSSH:RegistryUsername"],
+            RepositoryPrefix = configuration["DockerSSH:RepositoryPrefix"]
+        };
 
-            // Handle SSH key path with resolution
-            var configuredKeyPath = configuration["DockerSSH:KeyPath"];
-            config.SshKeyPath = ResolveSSHKeyPath(configuredKeyPath);
-        }
+        // Handle SSH key path with resolution
+        var configuredKeyPath = configuration["DockerSSH:SshKeyPath"];
+        config.SshKeyPath = ResolveSSHKeyPath(configuredKeyPath);
 
         return config;
     }
@@ -40,7 +38,7 @@ internal static class ConfigurationUtility
         }
 
         // If the path contains directory separators, assume it's a full path
-        if (configuredKeyPath.Contains(Path.DirectorySeparatorChar) || 
+        if (configuredKeyPath.Contains(Path.DirectorySeparatorChar) ||
             configuredKeyPath.Contains(Path.AltDirectorySeparatorChar))
         {
             return configuredKeyPath;
