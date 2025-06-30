@@ -61,7 +61,7 @@ public static class SSHUtility
         {
             // Check file size (SSH keys are typically between 100 bytes and 10KB)
             var fileInfo = new FileInfo(filePath);
-            if (fileInfo.Length < 100 || fileInfo.Length > 10240)
+            if (fileInfo.Length is < 100 or > 10240)
                 return false;
 
             // Read first few lines to check for SSH key headers

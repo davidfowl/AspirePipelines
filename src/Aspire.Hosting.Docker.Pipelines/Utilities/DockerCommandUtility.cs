@@ -177,7 +177,7 @@ public static class DockerCommandUtility
                 throw new InvalidOperationException("Docker daemon must be running for this deployment");
             }
         }
-        catch (Exception ex) when (!(ex is InvalidOperationException))
+        catch (Exception ex) when (ex is not InvalidOperationException)
         {
             await task.FailAsync($"Docker check failed: {ex.Message}", cancellationToken);
             throw new InvalidOperationException("Docker is required for this deployment", ex);

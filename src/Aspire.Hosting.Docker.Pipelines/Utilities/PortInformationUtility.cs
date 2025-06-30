@@ -248,7 +248,7 @@ public static class PortInformationUtility
     {
         // Valid TCP/UDP port range is 1-65535
         // Exclude 0 and negative numbers, and ports above 65535
-        return port > 0 && port <= 65535;
+        return port is > 0 and <= 65535;
     }
 
     private static bool IsValidPortString(string portString)
