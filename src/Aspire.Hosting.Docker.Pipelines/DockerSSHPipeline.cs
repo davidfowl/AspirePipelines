@@ -793,7 +793,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
 
                     await loginTask.SucceedAsync($"Successfully authenticated with {registryUrl}", cancellationToken: cancellationToken);
                 }
-                catch (Exception ex) when (!(ex is InvalidOperationException))
+                catch (Exception ex) when (ex is not InvalidOperationException)
                 {
                     await loginTask.FailAsync($"Docker login failed: {ex.Message}", cancellationToken);
                     throw new InvalidOperationException($"Docker login failed: {ex.Message}", ex);
