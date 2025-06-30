@@ -1,24 +1,6 @@
 # Aspire Docker SSH Deployment Pipeline
 
-This project demonstrates a sample implementation of SSH-based Docker deployment pipelines for .NET Aspire applications. It provides the `WithSshDeploySupport` extension method that enables automated deployment of containerized Aspire apps to remote hosts via SSH.
-
-## Overview
-
-The `WithSshDeploySupport` extension method is a **sample implementation** that showcases how future Aspire deployment pipeline extensions could be designed and implemented. It serves as a proof-of-concept for:
-
-- Configurable deployment pipelines that can be shared as NuGet packages
-- Interactive prompting for deployment parameters
-- Integration with IConfiguration for settings management
-- Reusable deployment patterns for .NET Aspire applications
-
-## Features
-
-- **SSH-based deployment**: Deploy Docker containers to remote hosts using SSH
-- **Interactive configuration**: Prompts for missing deployment parameters
-- **Configuration integration**: Reads settings from appsettings.json and other configuration sources
-- **Flexible paths**: Configurable remote deployment directory (defaults to `/home/{username}/aspire-app`)
-- **Docker management**: Automatically builds, transfers, and deploys Docker images
-- **Reusable**: Can be packaged and distributed as a NuGet package
+Deploy .NET Aspire applications to remote hosts via SSH with a single command. This sample demonstrates future deployment pipeline patterns for Aspire.
 
 ## Usage
 
@@ -56,6 +38,17 @@ Deploy your application using the Aspire CLI:
 # Deploy with interactive prompts
 aspire deploy
 ```
+
+## Overview
+
+Sample implementation showcasing configurable deployment pipelines that can be shared as NuGet packages, prompt for values, and integrate with IConfiguration.
+
+## Features
+
+- SSH-based Docker deployment to remote hosts
+- Interactive configuration prompts
+- Integration with appsettings.json and environment variables
+- Configurable deployment paths and Docker registries
 
 ## Configuration
 
