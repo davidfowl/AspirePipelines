@@ -54,29 +54,49 @@ internal class DockerSSHPipeline : IAsyncDisposable
         // Add password authentication option
         sshKeyOptions.Add(new KeyValuePair<string, string>("", "Password Authentication (no key)"));
 
+        // Prepare host options with config default first
+        var hostOptions = new List<KeyValuePair<string, string>>();
+        
+        // Add config default first if available
+        if (!string.IsNullOrEmpty(configDefaults.SshHost))
+        {
+            hostOptions.Add(new KeyValuePair<string, string>(configDefaults.SshHost, $"{configDefaults.SshHost} (configured)"));
+        }
+        
+        // Add discovered known hosts (avoid duplicates)
+        foreach (var host in sshConfig.KnownHosts)
+        {
+            if (string.IsNullOrEmpty(configDefaults.SshHost) || host != configDefaults.SshHost)
+            {
+                hostOptions.Add(new KeyValuePair<string, string>(host, host));
+            }
+        }
+        
+        // Add custom host option
+        hostOptions.Add(new KeyValuePair<string, string>("CUSTOM", "Enter custom host..."));
+
         var inputs = new InteractionInput[]
         {
             new() {
-                InputType = targetHostOptions.Count > 1 ? InputType.Choice : InputType.Text,
+                InputType = InputType.Choice,
                 Label = "Target Server Host",
-                Placeholder = targetHostOptions.Count > 1 ? "Select target server or enter custom" : "Enter target server hostname or IP (e.g., 192.168.1.100)",
-                Options = targetHostOptions.Count > 1 ? targetHostOptions : null,
-                Value = !string.IsNullOrEmpty(configDefaults.SshHost) ? configDefaults.SshHost :
-                        (targetHostOptions.Count > 1 && targetHostOptions.Any(h => h.Key != "CUSTOM") ? targetHostOptions.First(h => h.Key != "CUSTOM").Key : null)
+                Options = hostOptions,
+                Value = hostOptions.FirstOrDefault().Key
             },
-            new() { InputType = InputType.Text, Label = "Custom Host", Placeholder = "Enter custom hostname or IP (only if 'Enter custom host...' selected above)" },
+            new() {
+                InputType = InputType.Text,
+                Label = "Custom Host",
+            },
             new() {
                 Required = true,
                 InputType = InputType.Text,
                 Label = $"SSH Username",
-                Placeholder = $"Enter SSH username",
                 Value = !string.IsNullOrEmpty(configDefaults.SshUsername) ? configDefaults.SshUsername : sshConfig.DefaultUsername
             },
             new() { InputType = InputType.SecretText, Label = "SSH Password", Placeholder = "Enter SSH password (leave blank for key-based auth)" },
             new() {
                 InputType = InputType.Choice,
                 Label = "SSH Authentication Method",
-                Placeholder = "Select SSH authentication method",
                 Value = !string.IsNullOrEmpty(configDefaults.SshKeyPath) ? configDefaults.SshKeyPath :
                         (sshConfig.DefaultKeyPath ?? ""),
                 Options = sshKeyOptions
@@ -84,7 +104,6 @@ internal class DockerSSHPipeline : IAsyncDisposable
             new() {
                 InputType = InputType.Text,
                 Label = "SSH Port",
-                Placeholder = "SSH port",
                 Value = !string.IsNullOrEmpty(configDefaults.SshPort) && configDefaults.SshPort != "22" ? configDefaults.SshPort : "22"
             },
             new() {
