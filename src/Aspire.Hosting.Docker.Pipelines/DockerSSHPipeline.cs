@@ -929,13 +929,13 @@ internal class DockerSSHPipeline : IAsyncDisposable
         {
             var isImageVar = key.EndsWith("_IMAGE", StringComparison.OrdinalIgnoreCase);
             var isSensitive = EnvironmentFileUtility.IsSensitiveEnvironmentVariable(key);
-            
+
             envInputs.Add(new InteractionInput
             {
                 InputType = isSensitive ? InputType.SecretText : InputType.Text,
                 Label = $"Environment Variable: {key}",
                 Placeholder = isImageVar ? "Container image (auto-populated from registry)" : $"Enter value for {key}",
-                Value = value,
+                Value = string.IsNullOrEmpty(value) ? null : value,
                 Required = string.IsNullOrEmpty(value) || !isImageVar
             });
         }
