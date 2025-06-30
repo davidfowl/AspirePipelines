@@ -166,16 +166,6 @@ aspire deploy
 
 The `WithSshDeploySupport` extension method currently doesn't accept parameters. All configuration is handled through the configuration system (appsettings.json, environment variables, or interactive prompts).
 
-### Advanced Configuration
-
-The pipeline can be extended to support additional SSH deployment scenarios:
-
-- Custom Docker registries
-- Multi-host deployments
-- Blue-green deployment strategies
-- Health check integration
-- Rollback capabilities
-
 ## Security Considerations
 
 - **SSH Keys**: Consider using SSH key-based authentication instead of passwords
@@ -191,3 +181,4 @@ This sample implementation demonstrates the foundation for more advanced deploym
 - **CI/CD integration**: GitHub Actions, Azure DevOps, etc.
 - **Advanced orchestration**: Service mesh integration, load balancing
 - **Monitoring integration**: Health checks, logging, metrics collection
+- **Advanced SSH deployment scenarios**: multi-host deployments, blue-green deployment strategies, health check integration, rollback capabilities
