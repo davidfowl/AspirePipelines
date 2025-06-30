@@ -4,6 +4,12 @@ Deploy .NET Aspire applications to remote hosts via SSH with a single command. T
 
 ## Usage
 
+### Install the Aspire CLI
+
+```
+dotnet tool install --global aspire.cli --prerelease --source https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet9/nuget/v3/index.json
+```
+
 ### Basic Usage
 
 Add SSH deployment support to your Aspire app host:
