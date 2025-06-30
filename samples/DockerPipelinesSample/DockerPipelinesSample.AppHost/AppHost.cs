@@ -1,6 +1,7 @@
 var builder = DistributedApplication.CreateBuilder(args);
 
 builder.AddDockerComposeEnvironment("env")
+    .WithDashboard(db => db.WithHostPort(8085))
     .WithSshDeploySupport();
 
 var cache = builder.AddRedis("cache");

@@ -2,6 +2,8 @@
 
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Docker.Pipelines.Models;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 namespace Aspire.Hosting.Docker.Pipelines.Utilities;
 
@@ -9,10 +11,11 @@ internal static class SSHConfigurationDiscovery
 {
     public static Task<SSHConfiguration> DiscoverSSHConfiguration(DeployingContext context)
     {
+        // Get the application name from the host environment
+        var appName = context.Services.GetRequiredService<IHostEnvironment>().ApplicationName.ToLowerInvariant();
+
         var config = new SSHConfiguration();
 
-        // Try to detect default SSH username from environment
-        config.DefaultUsername = "root";
         // Look for SSH keys and known hosts in common locations
         var homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var sshDir = Path.Combine(homeDir, ".ssh");
@@ -73,7 +76,7 @@ internal static class SSHConfigurationDiscovery
             }
         }
 
-        config.DefaultDeployPath = $"/home/{config.DefaultUsername}/aspire-app";
+        config.DefaultDeployPath = $"/opt/{appName}";
         return Task.FromResult(config);
     }
 

@@ -2,11 +2,10 @@ namespace Aspire.Hosting.Docker.Pipelines.Models;
 
 public class SSHConfiguration
 {
-    public string DefaultUsername { get; set; } = string.Empty;
     public string? DefaultKeyPath { get; set; }
     public string DefaultDeployPath { get; set; } = string.Empty;
-    public List<string> AvailableKeyPaths { get; set; } = new();
-    public List<string> KnownHosts { get; set; } = new();
+    public List<string> AvailableKeyPaths { get; set; } = [];
+    public List<string> KnownHosts { get; set; } = [];
 }
 
 public class EnvironmentVariable

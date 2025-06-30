@@ -91,7 +91,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
                 Required = true,
                 InputType = InputType.Text,
                 Label = $"SSH Username",
-                Value = !string.IsNullOrEmpty(configDefaults.SshUsername) ? configDefaults.SshUsername : sshConfig.DefaultUsername
+                Value = configDefaults.SshUsername ?? "root"
             },
             new() { InputType = InputType.SecretText, Label = "SSH Password", Placeholder = "Enter SSH password (leave blank for key-based auth)" },
             new() {
@@ -109,7 +109,6 @@ internal class DockerSSHPipeline : IAsyncDisposable
             new() {
                 InputType = InputType.Text,
                 Label = "Remote Deploy Path",
-                Placeholder = "Remote deployment directory",
                 Value = !string.IsNullOrEmpty(configDefaults.RemoteDeployPath) ? configDefaults.RemoteDeployPath : sshConfig.DefaultDeployPath
             }
         };
