@@ -1,3 +1,4 @@
+using Aspire.Hosting.Docker.Pipelines.Models;
 using Microsoft.Extensions.Configuration;
 
 namespace Aspire.Hosting.Docker.Pipelines.Utilities;

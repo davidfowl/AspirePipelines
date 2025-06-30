@@ -9,6 +9,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Renci.SshNet;
 using System.Diagnostics;
+using Aspire.Hosting.Docker.Pipelines.Models;
 
 internal class DockerSSHPipeline : IAsyncDisposable
 {
@@ -1032,39 +1033,4 @@ internal class DockerSSHPipeline : IAsyncDisposable
             }
         }
     }
-}
-
-// Helper class for SSH configuration
-class SSHConfiguration
-{
-    public string DefaultUsername { get; set; } = string.Empty;
-    public string? DefaultKeyPath { get; set; }
-    public string DefaultDeployPath { get; set; } = string.Empty;
-    public List<string> AvailableKeyPaths { get; set; } = [];
-    public List<string> KnownHosts { get; set; } = [];
-}
-
-// Helper class for environment variable information
-class EnvironmentVariable
-{
-    public string Key { get; set; } = string.Empty;
-    public string CurrentValue { get; set; } = string.Empty;
-    public bool IsSensitive { get; set; }
-    public string? Description { get; set; }
-}
-
-// Helper class for DockerSSH configuration defaults
-class DockerSSHConfiguration
-{
-    // SSH Configuration
-    public string? SshHost { get; set; }
-    public string? SshUsername { get; set; }
-    public string SshPort { get; set; } = "22";
-    public string? SshKeyPath { get; set; }
-    public string? RemoteDeployPath { get; set; }
-    
-    // Docker Registry Configuration
-    public string RegistryUrl { get; set; } = "docker.io";
-    public string? RepositoryPrefix { get; set; }
-    public string? RegistryUsername { get; set; }
 }
