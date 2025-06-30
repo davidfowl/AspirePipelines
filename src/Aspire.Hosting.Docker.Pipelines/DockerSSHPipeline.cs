@@ -171,7 +171,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
             }
             else
             {
-                await verifyTask.WarnAsync("docker-compose.yml found, .env file missing but optional");
+                await verifyTask.SucceedAsync("docker-compose.yml found, .env file missing but optional");
                 await verifyStep.SucceedAsync("Deployment files verified (optional .env missing)");
             }
         }
@@ -292,8 +292,6 @@ internal class DockerSSHPipeline : IAsyncDisposable
             throw new InvalidOperationException($"Docker is not installed on the target server. Error: {dockerVersionCheck.Error}");
         }
 
-        await dockerCheckTask.UpdateAsync($"Docker version: {dockerVersionCheck.Output.Trim()}", cancellationToken);
-
         await dockerCheckTask.UpdateAsync("Verifying Docker daemon status...", cancellationToken);
 
         // Check if Docker daemon is running
@@ -303,8 +301,6 @@ internal class DockerSSHPipeline : IAsyncDisposable
             await dockerCheckTask.FailAsync($"Docker daemon is not running on the target server. Error: {dockerInfoCheck.Error}\nCommand: docker info --format '{{{{.ServerVersion}}}}' 2>/dev/null\nOutput: {dockerInfoCheck.Output}", cancellationToken);
             throw new InvalidOperationException($"Docker daemon is not running on the target server. Error: {dockerInfoCheck.Error}");
         }
-
-        await dockerCheckTask.UpdateAsync($"Docker daemon version: {dockerInfoCheck.Output.Trim()}", cancellationToken);
 
         await dockerCheckTask.UpdateAsync("Checking Docker Compose availability...", cancellationToken);
 
@@ -332,22 +328,9 @@ internal class DockerSSHPipeline : IAsyncDisposable
             throw new InvalidOperationException($"User does not have permission to run Docker commands. Add user to 'docker' group and restart the session.");
         }
 
-        await permissionsTask.UpdateAsync($"Docker permissions check: {dockerPermCheck.Output.Trim()}", cancellationToken);
-
-        await permissionsTask.UpdateAsync("Checking for existing containers...", cancellationToken);
-
         // Check if there are any existing containers that might conflict
         var existingContainersCheck = await ExecuteSSHCommandWithOutput($"cd {deployPath} 2>/dev/null && (docker compose ps -q 2>/dev/null || docker-compose ps -q 2>/dev/null) | wc -l || echo '0'", cancellationToken);
         var existingContainers = existingContainersCheck.Output?.Trim() ?? "0";
-
-        if (existingContainers != "0" && existingContainers != "")
-        {
-            await permissionsTask.UpdateAsync($"Found {existingContainers} existing containers (will be stopped during deployment)", cancellationToken);
-        }
-        else
-        {
-            await permissionsTask.UpdateAsync("No existing containers found", cancellationToken);
-        }
 
         await permissionsTask.SucceedAsync($"Permissions and resources validated. Existing containers: {existingContainers}", cancellationToken: cancellationToken);
     }
@@ -417,8 +400,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
         foreach (var file in transferredFiles)
         {
             var remotePath = $"{deployPath}/{file}";
-            await verifyTask.UpdateAsync($"Verifying {file}...", cancellationToken);
-
+            
             // Check if file exists and get its size
             var verifyResult = await ExecuteSSHCommandWithOutput($"ls -la '{remotePath}' 2>/dev/null || echo 'FILE_NOT_FOUND'", cancellationToken);
 
@@ -443,7 +425,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
                     throw new InvalidOperationException($"File transfer verification failed: Size mismatch for {file}");
                 }
 
-                await verifyTask.UpdateAsync($"✓ {file} verified - {localFileInfo.Length} bytes", cancellationToken);
+                await verifyTask.UpdateAsync($"✓ {file} verified ({localFileInfo.Length} bytes)", cancellationToken);
             }
             else
             {
@@ -451,7 +433,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
                 var existsResult = await ExecuteSSHCommandWithOutput($"test -f '{remotePath}' && echo 'EXISTS' || echo 'NOT_FOUND'", cancellationToken);
                 if (existsResult.Output.Trim() == "EXISTS")
                 {
-                    await verifyTask.UpdateAsync($"✓ {file} verified - file exists", cancellationToken);
+                    await verifyTask.UpdateAsync($"✓ {file} verified", cancellationToken);
                 }
                 else
                 {
@@ -464,7 +446,6 @@ internal class DockerSSHPipeline : IAsyncDisposable
         await verifyTask.SucceedAsync($"All {transferredFiles.Count} files verified on remote server", cancellationToken: cancellationToken);
 
         await using var summaryTask = await step.CreateTaskAsync("Deployment directory summary", cancellationToken);
-
         await summaryTask.UpdateAsync("Listing deployment directory contents...", cancellationToken);
 
         // Show final directory listing with file details
@@ -483,15 +464,9 @@ internal class DockerSSHPipeline : IAsyncDisposable
     {
         await using var stopTask = await step.CreateTaskAsync("Stopping existing containers", cancellationToken);
 
-        await stopTask.UpdateAsync("Checking existing containers...", cancellationToken);
-
         // Check if any containers are currently running in this deployment
         var existingCheck = await ExecuteSSHCommandWithOutput(
             $"cd {deployPath} && (docker compose ps -q || docker-compose ps -q || true) 2>/dev/null | wc -l", cancellationToken);
-
-        await stopTask.UpdateAsync($"Found {existingCheck.Output.Trim()} existing containers", cancellationToken);
-
-        await stopTask.UpdateAsync("Stopping existing containers...", cancellationToken);
 
         // Stop existing containers if any
         var stopResult = await ExecuteSSHCommandWithOutput(
@@ -574,13 +549,11 @@ internal class DockerSSHPipeline : IAsyncDisposable
                 if (runningContainers > 0)
                 {
                     healthyServices = runningContainers;
-                    await healthTask.UpdateAsync($"Found {runningContainers} healthy containers:\nCommand: cd {deployPath} && (docker compose ps --filter status=running || docker-compose ps --filter status=running || true)\n{healthCheck.Output.Trim()}", cancellationToken);
+                    await healthTask.UpdateAsync("Gathering deployment information...", cancellationToken);
                     break;
                 }
             }
         }
-
-        await healthTask.UpdateAsync("Gathering deployment information...", cancellationToken);
 
         // Get final service status
         var statusResult = await ExecuteSSHCommandWithOutput(
@@ -688,7 +661,6 @@ internal class DockerSSHPipeline : IAsyncDisposable
 
         // Task 2: Test basic SSH connectivity
         await using var testTask = await step.CreateTaskAsync("Testing SSH connectivity", cancellationToken);
-
         await testTask.UpdateAsync("Testing basic SSH connectivity...", cancellationToken);
 
         // First test basic connectivity
@@ -705,7 +677,6 @@ internal class DockerSSHPipeline : IAsyncDisposable
 
         // Task 3: Verify remote system access
         await using var verifyTask = await step.CreateTaskAsync("Verifying remote system access", cancellationToken);
-
         await verifyTask.UpdateAsync("Testing remote system access...", cancellationToken);
 
         // Test if we can get basic system information
@@ -819,7 +790,6 @@ internal class DockerSSHPipeline : IAsyncDisposable
             if (!string.IsNullOrEmpty(registryUsername) && !string.IsNullOrEmpty(registryPassword))
             {
                 await using var loginTask = await step.CreateTaskAsync("Authenticating with container registry", cancellationToken);
-
                 await loginTask.UpdateAsync($"Logging into registry {registryUrl}...", cancellationToken);
 
                 try
@@ -865,7 +835,6 @@ internal class DockerSSHPipeline : IAsyncDisposable
                 var imageName = cr.Name;
 
                 await using var tagTask = await step.CreateTaskAsync($"Tagging {serviceName} image", cancellationToken);
-
                 await tagTask.UpdateAsync($"Tagging image for service: {serviceName}...", cancellationToken);
 
                 // Construct the target image name
@@ -890,7 +859,6 @@ internal class DockerSSHPipeline : IAsyncDisposable
             foreach (var (serviceName, targetImageName) in imageTags)
             {
                 await using var pushTask = await step.CreateTaskAsync($"Pushing {serviceName} image", cancellationToken);
-
                 await pushTask.UpdateAsync($"Pushing {serviceName} image to registry...", cancellationToken);
 
                 var pushResult = await DockerCommandUtility.ExecuteDockerCommand($"push {targetImageName}", cancellationToken);
