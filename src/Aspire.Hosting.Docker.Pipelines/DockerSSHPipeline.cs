@@ -62,14 +62,14 @@ internal class DockerSSHPipeline : IAsyncDisposable
                 Placeholder = targetHostOptions.Count > 1 ? "Select target server or enter custom" : "Enter target server hostname or IP (e.g., 192.168.1.100)",
                 Options = targetHostOptions.Count > 1 ? targetHostOptions : null,
                 Value = !string.IsNullOrEmpty(configDefaults.SshHost) ? configDefaults.SshHost :
-                        (targetHostOptions.Count > 1 && targetHostOptions.Any(h => h.Key != "CUSTOM") ? targetHostOptions.First(h => h.Key != "CUSTOM").Key : "")
+                        (targetHostOptions.Count > 1 && targetHostOptions.Any(h => h.Key != "CUSTOM") ? targetHostOptions.First(h => h.Key != "CUSTOM").Key : null)
             },
             new() { InputType = InputType.Text, Label = "Custom Host", Placeholder = "Enter custom hostname or IP (only if 'Enter custom host...' selected above)" },
             new() {
                 Required = true,
                 InputType = InputType.Text,
                 Label = $"SSH Username",
-                Placeholder = $"Enter SSH username (detected: {sshConfig.DefaultUsername})",
+                Placeholder = $"Enter SSH username",
                 Value = !string.IsNullOrEmpty(configDefaults.SshUsername) ? configDefaults.SshUsername : sshConfig.DefaultUsername
             },
             new() { InputType = InputType.SecretText, Label = "SSH Password", Placeholder = "Enter SSH password (leave blank for key-based auth)" },
