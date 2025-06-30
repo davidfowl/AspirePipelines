@@ -273,16 +273,12 @@ internal class DockerSSHPipeline : IAsyncDisposable
     {
         await using var createDirTask = await step.CreateTaskAsync("Creating deployment directory", cancellationToken);
 
-        await createDirTask.UpdateAsync("Creating deployment directory...", cancellationToken);
-
         // Create deployment directory
         await ExecuteSSHCommand($"mkdir -p {deployPath}", cancellationToken);
 
         await createDirTask.SucceedAsync($"Directory created: {deployPath}", cancellationToken: cancellationToken);
 
         await using var dockerCheckTask = await step.CreateTaskAsync("Verifying Docker installation", cancellationToken);
-
-        await dockerCheckTask.UpdateAsync("Checking Docker installation...", cancellationToken);
 
         // Check if Docker is installed and get version info
         var dockerVersionCheck = await ExecuteSSHCommandWithOutput("docker --version", cancellationToken);
@@ -344,8 +340,6 @@ internal class DockerSSHPipeline : IAsyncDisposable
 
         await using var scanTask = await step.CreateTaskAsync("Scanning files for transfer", cancellationToken);
 
-        await scanTask.UpdateAsync("Scanning files for transfer...", cancellationToken);
-
         // Check for both .yml and .yaml extensions for docker-compose file
         var dockerComposeFile = File.Exists(Path.Combine(context.OutputPath, "docker-compose.yml"))
             ? "docker-compose.yml"
@@ -394,8 +388,6 @@ internal class DockerSSHPipeline : IAsyncDisposable
         await copyTask.SucceedAsync($"All {transferredFiles.Count} files transferred successfully", cancellationToken: cancellationToken);
 
         await using var verifyTask = await step.CreateTaskAsync("Verifying files on remote server", cancellationToken);
-
-        await verifyTask.UpdateAsync("Checking transferred files...", cancellationToken);
 
         foreach (var file in transferredFiles)
         {
@@ -446,8 +438,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
         await verifyTask.SucceedAsync($"All {transferredFiles.Count} files verified on remote server", cancellationToken: cancellationToken);
 
         await using var summaryTask = await step.CreateTaskAsync("Deployment directory summary", cancellationToken);
-        await summaryTask.UpdateAsync("Listing deployment directory contents...", cancellationToken);
-
+        
         // Show final directory listing with file details
         var dirListResult = await ExecuteSSHCommandWithOutput($"ls -la '{deployPath}'", cancellationToken);
         if (dirListResult.ExitCode == 0)
@@ -661,7 +652,6 @@ internal class DockerSSHPipeline : IAsyncDisposable
 
         // Task 2: Test basic SSH connectivity
         await using var testTask = await step.CreateTaskAsync("Testing SSH connectivity", cancellationToken);
-        await testTask.UpdateAsync("Testing basic SSH connectivity...", cancellationToken);
 
         // First test basic connectivity
         var testCommand = "echo 'SSH connection successful'";
@@ -677,7 +667,6 @@ internal class DockerSSHPipeline : IAsyncDisposable
 
         // Task 3: Verify remote system access
         await using var verifyTask = await step.CreateTaskAsync("Verifying remote system access", cancellationToken);
-        await verifyTask.UpdateAsync("Testing remote system access...", cancellationToken);
 
         // Test if we can get basic system information
         var infoCommand = "whoami && pwd && ls -la";
@@ -790,7 +779,6 @@ internal class DockerSSHPipeline : IAsyncDisposable
             if (!string.IsNullOrEmpty(registryUsername) && !string.IsNullOrEmpty(registryPassword))
             {
                 await using var loginTask = await step.CreateTaskAsync("Authenticating with container registry", cancellationToken);
-                await loginTask.UpdateAsync($"Logging into registry {registryUrl}...", cancellationToken);
 
                 try
                 {
@@ -835,7 +823,6 @@ internal class DockerSSHPipeline : IAsyncDisposable
                 var imageName = cr.Name;
 
                 await using var tagTask = await step.CreateTaskAsync($"Tagging {serviceName} image", cancellationToken);
-                await tagTask.UpdateAsync($"Tagging image for service: {serviceName}...", cancellationToken);
 
                 // Construct the target image name
                 var targetImageName = !string.IsNullOrEmpty(repositoryPrefix)
@@ -859,7 +846,6 @@ internal class DockerSSHPipeline : IAsyncDisposable
             foreach (var (serviceName, targetImageName) in imageTags)
             {
                 await using var pushTask = await step.CreateTaskAsync($"Pushing {serviceName} image", cancellationToken);
-                await pushTask.UpdateAsync($"Pushing {serviceName} image to registry...", cancellationToken);
 
                 var pushResult = await DockerCommandUtility.ExecuteDockerCommand($"push {targetImageName}", cancellationToken);
 
