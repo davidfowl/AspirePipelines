@@ -153,39 +153,6 @@ internal class DockerSSHPipeline : IAsyncDisposable
             throw new InvalidOperationException("Either SSH password or SSH private key path must be provided");
         }
 
-        // Step 1: Configure environment variables (before any progress steps)
-        var envPath = Path.Combine(context.OutputPath!, ".env");
-        if (File.Exists(envPath))
-        {
-            var missingEnvVars = await ScanEnvironmentFile(context);
-
-            if (missingEnvVars.Count != 0)
-            {
-                // Prompt for missing environment variables - clearly showing the key for each
-                var envInputs = missingEnvVars.Select(envVar => new InteractionInput
-                {
-                    InputType = envVar.IsSensitive ? InputType.SecretText : InputType.Text,
-                    Label = $"Environment Variable: {envVar.Key}",
-                    Placeholder = envVar.Description ?? $"Enter value for {envVar.Key}",
-                    Value = ""
-                }).ToArray();
-
-                var envResult = await interactionService.PromptInputsAsync(
-                    "Environment Variable Configuration",
-                    null,
-                    envInputs
-                );
-
-                if (envResult.Canceled)
-                {
-                    return;
-                }
-
-                // Update the .env file with the provided values
-                await UpdateEnvironmentFile(context, missingEnvVars, [.. envResult.Data.Select(d => d.Value ?? "")]);
-            }
-        }
-
         // Step 1: Verify deployment files exist
         await using var verifyStep = await context.ProgressReporter.CreateStepAsync("Verify deployment files", context.CancellationToken);
 
