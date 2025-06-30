@@ -1511,8 +1511,8 @@ internal class DockerSSHPipeline : IAsyncDisposable
                 InputType = isSensitive ? InputType.SecretText : InputType.Text,
                 Label = $"Environment Variable: {key}",
                 Placeholder = isImageVar ? "Container image (auto-populated from registry)" : $"Enter value for {key}",
-                Value = value ?? "",
-                Required = false // Allow empty values for optional variables
+                Value = value,
+                Required = string.IsNullOrEmpty(value) || !isImageVar
             });
         }
 
@@ -1771,22 +1771,22 @@ internal class DockerSSHPipeline : IAsyncDisposable
         var dockerSSHSection = configuration?.GetSection("DockerSSH");
         
         // Get SSH key path from configuration and resolve if it's just a key name
-        var configuredKeyPath = dockerSSHSection?.GetValue<string>("SshKeyPath") ?? "";
+        var configuredKeyPath = dockerSSHSection?.GetValue<string>("SshKeyPath");
         var resolvedKeyPath = ResolveSSHKeyPath(configuredKeyPath);
         
         return new DockerSSHConfiguration
         {
             // SSH Configuration defaults
-            SshHost = dockerSSHSection?.GetValue<string>("SshHost") ?? "",
-            SshUsername = dockerSSHSection?.GetValue<string>("SshUsername") ?? "",
+            SshHost = dockerSSHSection?.GetValue<string>("SshHost"),
+            SshUsername = dockerSSHSection?.GetValue<string>("SshUsername"),
             SshPort = dockerSSHSection?.GetValue<string>("SshPort") ?? "22",
             SshKeyPath = resolvedKeyPath,
-            RemoteDeployPath = dockerSSHSection?.GetValue<string>("RemoteDeployPath") ?? "",
+            RemoteDeployPath = dockerSSHSection?.GetValue<string>("RemoteDeployPath"),
             
             // Docker Registry Configuration defaults
             RegistryUrl = dockerSSHSection?.GetValue<string>("RegistryUrl") ?? "docker.io",
-            RepositoryPrefix = dockerSSHSection?.GetValue<string>("RepositoryPrefix") ?? "",
-            RegistryUsername = dockerSSHSection?.GetValue<string>("RegistryUsername") ?? ""
+            RepositoryPrefix = dockerSSHSection?.GetValue<string>("RepositoryPrefix"),
+            RegistryUsername = dockerSSHSection?.GetValue<string>("RegistryUsername")
         };
     }
 
@@ -1794,11 +1794,11 @@ internal class DockerSSHPipeline : IAsyncDisposable
     /// Resolves SSH key path from configuration. If the path is just a key name (no path separators),
     /// it assumes the key is in the ~/.ssh directory. Otherwise, returns the path as-is.
     /// </summary>
-    private static string ResolveSSHKeyPath(string configuredKeyPath)
+    private static string? ResolveSSHKeyPath(string? configuredKeyPath)
     {
         if (string.IsNullOrEmpty(configuredKeyPath))
         {
-            return "";
+            return null;
         }
 
         // If the configured path contains path separators, treat it as a full path
@@ -1815,8 +1815,6 @@ internal class DockerSSHPipeline : IAsyncDisposable
         // Only return the resolved path if the file actually exists
         return File.Exists(resolvedPath) ? resolvedPath : configuredKeyPath;
     }
-
-    // ...existing code...
 }
 
 // Helper class for SSH configuration
@@ -1842,14 +1840,14 @@ class EnvironmentVariable
 class DockerSSHConfiguration
 {
     // SSH Configuration
-    public string SshHost { get; set; } = string.Empty;
-    public string SshUsername { get; set; } = string.Empty;
+    public string? SshHost { get; set; }
+    public string? SshUsername { get; set; }
     public string SshPort { get; set; } = "22";
-    public string SshKeyPath { get; set; } = string.Empty;
-    public string RemoteDeployPath { get; set; } = string.Empty;
+    public string? SshKeyPath { get; set; }
+    public string? RemoteDeployPath { get; set; }
     
     // Docker Registry Configuration
     public string RegistryUrl { get; set; } = "docker.io";
-    public string RepositoryPrefix { get; set; } = string.Empty;
-    public string RegistryUsername { get; set; } = string.Empty;
+    public string? RepositoryPrefix { get; set; }
+    public string? RegistryUsername { get; set; }
 }
