@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/samples/" />
+  <Folder Name="/samples/DockerPipelinesSample/">
+    <Project Path="samples/DockerPipelinesSample/DockerPipelinesSample.ApiService/DockerPipelinesSample.ApiService.csproj" />
+    <Project Path="samples/DockerPipelinesSample/DockerPipelinesSample.AppHost/DockerPipelinesSample.AppHost.csproj" />
+    <Project Path="samples/DockerPipelinesSample/DockerPipelinesSample.ServiceDefaults/DockerPipelinesSample.ServiceDefaults.csproj" />
+    <Project Path="samples/DockerPipelinesSample/DockerPipelinesSample.Web/DockerPipelinesSample.Web.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/Aspire.Hosting.Docker.Pipelines/Aspire.Hosting.Docker.Pipelines.csproj" />
+  </Folder>
+</Solution>
