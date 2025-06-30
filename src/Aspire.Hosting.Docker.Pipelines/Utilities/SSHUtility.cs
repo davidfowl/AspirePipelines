@@ -4,9 +4,8 @@ namespace Aspire.Hosting.Docker.Pipelines.Utilities;
 
 public static class SSHUtility
 {
-    public static async Task<SshClient> CreateSSHClient(string host, string username, string? password, string? keyPath, string port, CancellationToken cancellationToken)
+    public static async Task<SshClient> CreateSSHClient(ConnectionInfo connectionInfo, CancellationToken cancellationToken)
     {
-        var connectionInfo = CreateConnectionInfo(host, username, password, keyPath, port);
         var client = new SshClient(connectionInfo);
 
         await client.ConnectAsync(cancellationToken);
@@ -20,9 +19,8 @@ public static class SSHUtility
         return client;
     }
 
-    public static async Task<ScpClient> CreateSCPClient(string host, string username, string? password, string? keyPath, string port, CancellationToken cancellationToken)
+    public static async Task<ScpClient> CreateSCPClient(ConnectionInfo connectionInfo, CancellationToken cancellationToken)
     {
-        var connectionInfo = CreateConnectionInfo(host, username, password, keyPath, port);
         var client = new ScpClient(connectionInfo);
 
         await client.ConnectAsync(cancellationToken);

@@ -636,8 +636,9 @@ internal class DockerSSHPipeline : IAsyncDisposable
         {
             await connectTask.UpdateAsync("Creating SSH and SCP connections...", cancellationToken);
 
-            _sshClient = await SSHUtility.CreateSSHClient(host, username, password, keyPath, port, cancellationToken);
-            _scpClient = await SSHUtility.CreateSCPClient(host, username, password, keyPath, port, cancellationToken);
+            var connectionInfo = SSHUtility.CreateConnectionInfo(host, username, password, keyPath, port);
+            _sshClient = await SSHUtility.CreateSSHClient(connectionInfo, cancellationToken);
+            _scpClient = await SSHUtility.CreateSCPClient(connectionInfo, cancellationToken);
 
             Console.WriteLine("[DEBUG] SSH and SCP connections established successfully");
             await connectTask.SucceedAsync("SSH and SCP connections established", cancellationToken: cancellationToken);
