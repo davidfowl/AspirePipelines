@@ -4,6 +4,7 @@
 using Aspire.Hosting;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Publishing;
+using Aspire.Hosting.Docker.Pipelines.Utilities;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Renci.SshNet;
@@ -20,12 +21,13 @@ internal class DockerSSHPipeline : IAsyncDisposable
         await CheckPrerequisitesConcurrently(context);
 
         var interactionService = context.Services.GetRequiredService<IInteractionService>();
+        var configuration = context.Services.GetRequiredService<IConfiguration>();
 
         // Get configuration defaults
-        var configDefaults = GetConfigurationDefaults(context);
+        var configDefaults = ConfigurationUtility.GetConfigurationDefaults(configuration);
 
         // Step 1: Discover SSH configuration
-        var sshConfig = await DiscoverSSHConfiguration(context);
+        var sshConfig = await SSHConfigurationDiscovery.DiscoverSSHConfiguration(context);
 
         // Prepare target host selection options
         var targetHostOptions = new List<KeyValuePair<string, string>>();
@@ -160,7 +162,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
         {
             await using var verifyTask = await verifyStep.CreateTaskAsync("Checking for required files", context.CancellationToken);
 
-            var envFileExists = await VerifyDeploymentFiles(context);
+            var envFileExists = await DeploymentFileUtility.VerifyDeploymentFiles(context);
             if (envFileExists)
             {
                 await verifyTask.SucceedAsync("docker-compose.yml and .env found");
@@ -250,8 +252,8 @@ internal class DockerSSHPipeline : IAsyncDisposable
         await using var prerequisiteStep = await context.ProgressReporter.CreateStepAsync("Checking deployment prerequisites", context.CancellationToken);
 
         // Create all prerequisite check tasks
-        var dockerTask = CheckDockerAvailability(prerequisiteStep, context.CancellationToken);
-        var dockerComposeTask = CheckDockerCompose(prerequisiteStep, context.CancellationToken);
+        var dockerTask = DockerCommandUtility.CheckDockerAvailability(prerequisiteStep, context.CancellationToken);
+        var dockerComposeTask = DockerCommandUtility.CheckDockerCompose(prerequisiteStep, context.CancellationToken);
 
         // Run all prerequisite checks concurrently
         try
@@ -265,244 +267,6 @@ internal class DockerSSHPipeline : IAsyncDisposable
             throw;
         }
     }
-
-    private static async Task CheckDockerAvailability(PublishingStep step, CancellationToken cancellationToken)
-    {
-        await using var task = await step.CreateTaskAsync("Checking Docker availability", cancellationToken);
-
-        try
-        {
-            await task.UpdateAsync("Checking Docker client version...", cancellationToken);
-
-            // Check Docker version
-            var versionResult = await ExecuteDockerCommand("--version", cancellationToken);
-
-            if (versionResult.ExitCode != 0)
-            {
-                await task.FailAsync("Docker is not installed or not in PATH", cancellationToken);
-                throw new InvalidOperationException("Docker is required for this deployment");
-            }
-
-            await task.UpdateAsync("Checking Docker daemon connectivity...", cancellationToken);
-
-            // Check Docker daemon connectivity
-            var infoResult = await ExecuteDockerCommand("info --format '{{.ServerVersion}}'", cancellationToken);
-
-            if (infoResult.ExitCode == 0 && !string.IsNullOrEmpty(infoResult.Output.Trim()))
-            {
-                var clientVersion = versionResult.Output.Split(',').FirstOrDefault()?.Trim() ?? "Unknown version";
-                var serverVersion = infoResult.Output.Trim();
-                await task.SucceedAsync($"Docker is available - Client: {clientVersion}, Server: {serverVersion}", cancellationToken: cancellationToken);
-            }
-            else
-            {
-                await task.FailAsync("Docker daemon is not running or not accessible", cancellationToken);
-                throw new InvalidOperationException("Docker daemon must be running for this deployment");
-            }
-        }
-        catch (Exception ex) when (!(ex is InvalidOperationException))
-        {
-            await task.FailAsync($"Docker check failed: {ex.Message}", cancellationToken);
-            throw new InvalidOperationException("Docker is required for this deployment", ex);
-        }
-    }
-
-    private static async Task CheckDockerCompose(PublishingStep step, CancellationToken cancellationToken)
-    {
-        await using var task = await step.CreateTaskAsync("Checking Docker Compose availability", cancellationToken);
-
-        try
-        {
-            var result = await ExecuteDockerCommand("compose version", cancellationToken);
-
-            if (result.ExitCode == 0 && !string.IsNullOrEmpty(result.Output))
-            {
-                // Extract version info from output
-                var versionLine = result.Output.Split('\n').FirstOrDefault()?.Trim();
-                await task.SucceedAsync($"Docker Compose is available: {versionLine}", cancellationToken: cancellationToken);
-            }
-            else
-            {
-                // Try legacy docker-compose command
-                var legacyResult = await ExecuteDockerComposeCommand("--version", cancellationToken);
-
-                if (legacyResult.ExitCode == 0 && !string.IsNullOrEmpty(legacyResult.Output))
-                {
-                    var versionLine = legacyResult.Output.Split('\n').FirstOrDefault()?.Trim();
-                    await task.SucceedAsync($"Docker Compose (legacy) is available: {versionLine}", cancellationToken: cancellationToken);
-                }
-                else
-                {
-                    await task.FailAsync("Docker Compose is not available (neither 'docker compose' nor 'docker-compose')", cancellationToken);
-                    throw new InvalidOperationException("Docker Compose is required for this deployment");
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            await task.FailAsync($"Docker Compose check failed: {ex.Message}", cancellationToken);
-            throw new InvalidOperationException("Docker Compose is required for this deployment", ex);
-        }
-    }
-
-    private Task<SSHConfiguration> DiscoverSSHConfiguration(DeployingContext context)
-    {
-        var config = new SSHConfiguration();
-
-        // Try to detect default SSH username from environment
-        var currentUser = Environment.UserName;
-        config.DefaultUsername = "root";
-        // Look for SSH keys and known hosts in common locations
-        var homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        var sshDir = Path.Combine(homeDir, ".ssh");
-
-        if (Directory.Exists(sshDir))
-        {
-            // Discover all SSH keys in the .ssh directory
-            var commonKeyFiles = new[] { "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa" };
-
-            // First, add common key files in preferred order
-            var orderedKeyFiles = new List<string>();
-            foreach (var commonKey in commonKeyFiles)
-            {
-                var keyPath = Path.Combine(sshDir, commonKey);
-                if (File.Exists(keyPath))
-                {
-                    orderedKeyFiles.Add(keyPath);
-                }
-            }
-
-            // Then add any other SSH-like keys that aren't in the common list
-            var otherKeyFiles = Directory.GetFiles(sshDir, "*", SearchOption.TopDirectoryOnly)
-                .Where(f => !Path.GetFileName(f).EndsWith(".pub") && !Path.GetFileName(f).EndsWith(".ppk"))
-                .Where(f => !commonKeyFiles.Contains(Path.GetFileName(f)) && IsLikelySSHKey(f))
-                .OrderBy(f => Path.GetFileName(f))
-                .ToList();
-
-            orderedKeyFiles.AddRange(otherKeyFiles);
-
-            foreach (var keyPath in orderedKeyFiles)
-            {
-                try
-                {
-                    // Just add the path if the file exists and is readable
-                    if (File.Exists(keyPath))
-                    {
-                        config.AvailableKeyPaths.Add(keyPath);
-                    }
-                }
-                catch
-                {
-                    // Skip keys that can't be read
-                    continue;
-                }
-            }
-
-            // Set default key path to the first discovered key
-            if (config.AvailableKeyPaths.Any())
-            {
-                config.DefaultKeyPath = config.AvailableKeyPaths.First();
-            }
-
-            // Discover known hosts from SSH known_hosts file
-            var knownHostsPath = Path.Combine(sshDir, "known_hosts");
-            if (File.Exists(knownHostsPath))
-            {
-                ParseKnownHostsFile(knownHostsPath, config.KnownHosts);
-            }
-        }
-
-        config.DefaultDeployPath = $"/home/{config.DefaultUsername}/aspire-app";
-        return Task.FromResult(config);
-
-        // Local function to parse SSH known_hosts file
-        // The known_hosts file format contains one host per line with format:
-        // hostname[,hostname...] [hostkey_algorithm] [base64_key] [optional_comment]
-        // Lines can also start with @ for special entries or be hashed with |1| prefix
-        // We extract unique hostnames while handling multiple hosts per line and port specifications
-        void ParseKnownHostsFile(string filePath, List<string> knownHosts)
-        {
-            try
-            {
-                var lines = File.ReadAllLines(filePath);
-                var hostSet = new HashSet<string>();
-
-                foreach (var line in lines)
-                {
-                    var trimmedLine = line.Trim();
-
-                    // Skip empty lines, comments, hashed entries, and special entries
-                    if (string.IsNullOrEmpty(trimmedLine) ||
-                        trimmedLine.StartsWith("#") ||
-                        trimmedLine.StartsWith("|1|") ||
-                        trimmedLine.StartsWith("@"))
-                    {
-                        continue;
-                    }
-
-                    // Split on whitespace to get the host part (first field)
-                    var parts = trimmedLine.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries);
-                    if (parts.Length < 2) continue;
-
-                    var hostPart = parts[0];
-
-                    // Handle multiple hostnames separated by commas
-                    var hosts = hostPart.Split(',');
-                    foreach (var host in hosts)
-                    {
-                        var cleanHost = host.Trim();
-                        if (string.IsNullOrEmpty(cleanHost)) continue;
-
-                        // Remove port specification (e.g., [hostname]:port -> hostname)
-                        if (cleanHost.StartsWith("[") && cleanHost.Contains("]:"))
-                        {
-                            var endBracket = cleanHost.IndexOf("]:");
-                            if (endBracket > 1)
-                            {
-                                cleanHost = cleanHost[1..endBracket];
-                            }
-                        }
-
-                        // Skip if still contains problematic characters (likely hashed or malformed)
-                        if (cleanHost.Contains("|") || cleanHost.Contains("=")) continue;
-
-                        hostSet.Add(cleanHost);
-                    }
-                }
-
-                // Add unique hosts to the known hosts list
-                knownHosts.AddRange(hostSet.OrderBy(h => h));
-            }
-            catch (Exception ex)
-            {
-                // Log error but don't fail the entire discovery process
-                Console.WriteLine($"Warning: Could not parse known_hosts file: {ex.Message}");
-            }
-        }
-    }
-
-    private static Task<bool> VerifyDeploymentFiles(DeployingContext context)
-    {
-        if (string.IsNullOrEmpty(context.OutputPath))
-        {
-            throw new InvalidOperationException("Deployment output path not available");
-        }
-
-        // Check for both .yml and .yaml extensions
-        var dockerComposePathYml = Path.Combine(context.OutputPath, "docker-compose.yml");
-        var dockerComposePathYaml = Path.Combine(context.OutputPath, "docker-compose.yaml");
-        var envPath = Path.Combine(context.OutputPath, ".env");
-
-        if (!File.Exists(dockerComposePathYml) && !File.Exists(dockerComposePathYaml))
-        {
-            throw new InvalidOperationException($"docker-compose.yml or docker-compose.yaml not found in {context.OutputPath}");
-        }
-
-        // .env file is optional - return whether it exists
-        var envExists = File.Exists(envPath);
-        return Task.FromResult(envExists);
-    }
-
 
     private async Task PrepareRemoteEnvironment(string deployPath, PublishingStep step, CancellationToken cancellationToken)
     {
@@ -822,7 +586,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
             $"cd {deployPath} && (docker compose ps || docker-compose ps)", cancellationToken);
 
         // Try to extract port information
-        var portsInfo = await ExtractPortInformation(deployPath, cancellationToken);
+        var portsInfo = await PortInformationUtility.ExtractPortInformation(deployPath, _sshClient!, cancellationToken);
 
         await healthTask.SucceedAsync($"Services are healthy and ready\nCommand: cd {deployPath} && (docker compose ps || docker-compose ps)\nFinal status:\n{statusResult.Output.Trim()}", cancellationToken: cancellationToken);
 
@@ -848,73 +612,6 @@ internal class DockerSSHPipeline : IAsyncDisposable
         {
             throw new InvalidOperationException($"File transfer failed for {localPath}: {ex.Message}", ex);
         }
-    }
-
-    private async Task<string> ExtractPortInformation(string deployPath, CancellationToken cancellationToken)
-    {
-        // Try to get port mappings from running containers
-        var portResult = await ExecuteSSHCommandWithOutput(
-            $"cd {deployPath} && docker ps --format 'table {{{{.Names}}}}\\t{{{{.Ports}}}}' --filter label=com.docker.compose.project", cancellationToken);
-
-        if (!string.IsNullOrEmpty(portResult.Output))
-        {
-            var portMappings = portResult.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries)
-                .Skip(1) // Skip header
-                .Where(line => line.Contains("->"))
-                .SelectMany(line =>
-                {
-                    var parts = line.Trim().Split('\t');
-                    if (parts.Length >= 2)
-                    {
-                        var portsPart = parts[1];
-                        return portsPart.Split(',')
-                            .Where(p => p.Contains("->"))
-                            .Select(p => p.Trim().Split("->")[0].Split(':').LastOrDefault())
-                            .Where(p => !string.IsNullOrEmpty(p));
-                    }
-                    return [];
-                })
-                .Distinct()
-                .Where(p => int.TryParse(p, out _));
-
-            if (portMappings.Any())
-            {
-                // For port URLs, we need the host information from the SSH connection
-                if (_sshClient?.ConnectionInfo?.Host != null)
-                {
-                    return $"Accessible URLs: {string.Join(", ", portMappings.Select(p => $"http://{_sshClient.ConnectionInfo.Host}:{p}"))}";
-                }
-                else
-                {
-                    return $"Accessible ports: {string.Join(", ", portMappings)}";
-                }
-            }
-        }
-
-        // Fallback: try to extract from docker-compose.yml or docker-compose.yaml
-        var composePortResult = await ExecuteSSHCommandWithOutput(
-            $"cd {deployPath} && (grep -E '^\\s*-\\s*[\"']*[0-9]+:[0-9]+[\"']*' docker-compose.yml || grep -E '^\\s*-\\s*[\"']*[0-9]+:[0-9]+[\"']*' docker-compose.yaml) 2>/dev/null | sed 's/.*\"\\([0-9]*\\):.*/\\1/' | sort -u", cancellationToken);
-
-        if (!string.IsNullOrEmpty(composePortResult.Output))
-        {
-            var ports = composePortResult.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries)
-                .Where(p => int.TryParse(p.Trim(), out _))
-                .Distinct();
-
-            if (ports.Any())
-            {
-                if (_sshClient?.ConnectionInfo?.Host != null)
-                {
-                    return $"Configured ports: {string.Join(", ", ports.Select(p => $"http://{_sshClient.ConnectionInfo.Host}:{p}"))}";
-                }
-                else
-                {
-                    return $"Configured ports: {string.Join(", ", ports)}";
-                }
-            }
-        }
-
-        return "Port information not available";
     }
 
     private async Task ExecuteSSHCommand(string command, CancellationToken cancellationToken)
@@ -963,51 +660,6 @@ internal class DockerSSHPipeline : IAsyncDisposable
         }
     }
 
-    private static bool IsSensitiveEnvironmentVariable(string key)
-    {
-        var sensitiveKeywords = new[]
-        {
-            "PASSWORD", "SECRET", "KEY", "TOKEN", "API_KEY", "PRIVATE",
-            "CERT", "CREDENTIAL", "AUTH", "PASS", "PWD"
-        };
-
-        return sensitiveKeywords.Any(keyword => key.Contains(keyword, StringComparison.InvariantCultureIgnoreCase));
-    }
-
-    private static bool IsLikelySSHKey(string filePath)
-    {
-        try
-        {
-            // Check file size (SSH keys are typically between 100 bytes and 10KB)
-            var fileInfo = new FileInfo(filePath);
-            if (fileInfo.Length < 100 || fileInfo.Length > 10240)
-                return false;
-
-            // Read first few lines to check for SSH key headers
-            var firstLines = File.ReadLines(filePath).Take(3).ToArray();
-            if (firstLines.Length == 0)
-                return false;
-
-            var firstLine = firstLines[0].Trim();
-
-            // Check for common SSH key headers
-            var sshKeyHeaders = new[]
-            {
-                "-----BEGIN OPENSSH PRIVATE KEY-----",
-                "-----BEGIN RSA PRIVATE KEY-----",
-                "-----BEGIN DSA PRIVATE KEY-----",
-                "-----BEGIN EC PRIVATE KEY-----",
-                "-----BEGIN PRIVATE KEY-----"
-            };
-
-            return sshKeyHeaders.Any(header => firstLine.StartsWith(header, StringComparison.OrdinalIgnoreCase));
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
     private async Task EstablishAndTestSSHConnection(string host, string username, string? password, string? keyPath, string port, PublishingStep step, CancellationToken cancellationToken)
     {
         Console.WriteLine("[DEBUG] Establishing SSH connection using SSH.NET");
@@ -1019,8 +671,8 @@ internal class DockerSSHPipeline : IAsyncDisposable
         {
             await connectTask.UpdateAsync("Creating SSH and SCP connections...", cancellationToken);
 
-            _sshClient = await CreateSSHClient(host, username, password, keyPath, port, cancellationToken);
-            _scpClient = await CreateSCPClient(host, username, password, keyPath, port, cancellationToken);
+            _sshClient = await SSHUtility.CreateSSHClient(host, username, password, keyPath, port, cancellationToken);
+            _scpClient = await SSHUtility.CreateSCPClient(host, username, password, keyPath, port, cancellationToken);
 
             Console.WriteLine("[DEBUG] SSH and SCP connections established successfully");
             await connectTask.SucceedAsync("SSH and SCP connections established", cancellationToken: cancellationToken);
@@ -1066,59 +718,6 @@ internal class DockerSSHPipeline : IAsyncDisposable
         }
 
         await verifyTask.SucceedAsync($"Remote system access verified\nCommand: {infoCommand}\nSystem info: {infoResult.Output.Trim()}", cancellationToken: cancellationToken);
-    }
-
-    private static async Task<SshClient> CreateSSHClient(string host, string username, string? password, string? keyPath, string port, CancellationToken cancellationToken)
-    {
-        var connectionInfo = CreateConnectionInfo(host, username, password, keyPath, port);
-        var client = new SshClient(connectionInfo);
-
-        await client.ConnectAsync(cancellationToken);
-
-        if (!client.IsConnected)
-        {
-            client.Dispose();
-            throw new InvalidOperationException("Failed to establish SSH connection");
-        }
-
-        return client;
-    }
-
-    private static async Task<ScpClient> CreateSCPClient(string host, string username, string? password, string? keyPath, string port, CancellationToken cancellationToken)
-    {
-        var connectionInfo = CreateConnectionInfo(host, username, password, keyPath, port);
-        var client = new ScpClient(connectionInfo);
-
-        await client.ConnectAsync(cancellationToken);
-
-        if (!client.IsConnected)
-        {
-            client.Dispose();
-            throw new InvalidOperationException("Failed to establish SCP connection");
-        }
-
-        return client;
-    }
-
-    private static ConnectionInfo CreateConnectionInfo(string host, string username, string? password, string? keyPath, string port)
-    {
-        var portInt = int.Parse(port);
-
-        if (!string.IsNullOrEmpty(keyPath))
-        {
-            // Use key-based authentication
-            var keyFile = new PrivateKeyFile(keyPath, password ?? "");
-            return new ConnectionInfo(host, portInt, username, new PrivateKeyAuthenticationMethod(username, keyFile));
-        }
-        else if (!string.IsNullOrEmpty(password))
-        {
-            // Use password authentication
-            return new ConnectionInfo(host, portInt, username, new PasswordAuthenticationMethod(username, password));
-        }
-        else
-        {
-            throw new InvalidOperationException("Either SSH password or SSH private key path must be provided");
-        }
     }
 
     private async Task CleanupSSHConnection()
@@ -1224,7 +823,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
 
                 try
                 {
-                    var loginResult = await ExecuteDockerLogin(registryUrl, registryUsername, registryPassword, cancellationToken);
+                    var loginResult = await DockerCommandUtility.ExecuteDockerLogin(registryUrl, registryUsername, registryPassword, cancellationToken);
 
                     if (loginResult.ExitCode != 0)
                     {
@@ -1274,7 +873,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
                     : $"{registryUrl}/{serviceName}:{imageTag}";
 
                 // Tag the image
-                var tagResult = await ExecuteDockerCommand($"tag {imageName} {targetImageName}", cancellationToken);
+                var tagResult = await DockerCommandUtility.ExecuteDockerCommand($"tag {imageName} {targetImageName}", cancellationToken);
 
                 if (tagResult.ExitCode != 0)
                 {
@@ -1293,7 +892,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
 
                 await pushTask.UpdateAsync($"Pushing {serviceName} image to registry...", cancellationToken);
 
-                var pushResult = await ExecuteDockerCommand($"push {targetImageName}", cancellationToken);
+                var pushResult = await DockerCommandUtility.ExecuteDockerCommand($"push {targetImageName}", cancellationToken);
 
                 if (pushResult.ExitCode != 0)
                 {
@@ -1328,7 +927,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
         }
 
         // Step 1: Read local environment file
-        var localEnvVars = await ReadEnvironmentFile(localEnvPath);
+        var localEnvVars = await EnvironmentFileUtility.ReadEnvironmentFile(localEnvPath);
         
         // Step 2: Get remote environment file (if it exists)
         var remoteEnvVars = new Dictionary<string, string>();
@@ -1339,7 +938,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
             var remoteEnvResult = await ExecuteSSHCommandWithOutput($"cat '{remoteEnvPath}' 2>/dev/null || echo 'FILE_NOT_FOUND'", cancellationToken);
             if (remoteEnvResult.ExitCode == 0 && !remoteEnvResult.Output.Contains("FILE_NOT_FOUND"))
             {
-                remoteEnvVars = ParseEnvironmentContent(remoteEnvResult.Output);
+                remoteEnvVars = EnvironmentFileUtility.ParseEnvironmentContent(remoteEnvResult.Output);
             }
         }
         catch
@@ -1373,7 +972,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
         foreach (var (key, value) in sortedEnvVars)
         {
             var isImageVar = key.EndsWith("_IMAGE", StringComparison.OrdinalIgnoreCase);
-            var isSensitive = IsSensitiveEnvironmentVariable(key);
+            var isSensitive = EnvironmentFileUtility.IsSensitiveEnvironmentVariable(key);
             
             envInputs.Add(new InteractionInput
             {
@@ -1432,257 +1031,6 @@ internal class DockerSSHPipeline : IAsyncDisposable
                 File.Delete(tempFile);
             }
         }
-    }
-
-    private async Task<Dictionary<string, string>> ReadEnvironmentFile(string filePath)
-    {
-        var envVars = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        
-        if (!File.Exists(filePath))
-        {
-            return envVars;
-        }
-
-        var lines = await File.ReadAllLinesAsync(filePath);
-        foreach (var line in lines)
-        {
-            var trimmedLine = line.Trim();
-            
-            // Skip comments and empty lines
-            if (string.IsNullOrEmpty(trimmedLine) || trimmedLine.StartsWith("#"))
-            {
-                continue;
-            }
-
-            // Parse KEY=VALUE format
-            var equalIndex = trimmedLine.IndexOf('=');
-            if (equalIndex > 0)
-            {
-                var key = trimmedLine[..equalIndex].Trim();
-                var value = trimmedLine[(equalIndex + 1)..].Trim();
-                
-                // Remove quotes if present
-                if ((value.StartsWith("\"") && value.EndsWith("\"")) ||
-                    (value.StartsWith("'") && value.EndsWith("'")))
-                {
-                    value = value[1..^1];
-                }
-                
-                envVars[key] = value;
-            }
-        }
-
-        return envVars;
-    }
-
-    private Dictionary<string, string> ParseEnvironmentContent(string content)
-    {
-        var envVars = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        
-        if (string.IsNullOrEmpty(content))
-        {
-            return envVars;
-        }
-
-        var lines = content.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-        foreach (var line in lines)
-        {
-            var trimmedLine = line.Trim();
-            
-            // Skip comments and empty lines
-            if (string.IsNullOrEmpty(trimmedLine) || trimmedLine.StartsWith("#"))
-            {
-                continue;
-            }
-
-            // Parse KEY=VALUE format
-            var equalIndex = trimmedLine.IndexOf('=');
-            if (equalIndex > 0)
-            {
-                var key = trimmedLine[..equalIndex].Trim();
-                var value = trimmedLine[(equalIndex + 1)..].Trim();
-                
-                // Remove quotes if present
-                if ((value.StartsWith("\"") && value.EndsWith("\"")) ||
-                    (value.StartsWith("'") && value.EndsWith("'")))
-                {
-                    value = value[1..^1];
-                }
-                
-                envVars[key] = value;
-            }
-        }
-
-        return envVars;
-    }
-
-    /// <summary>
-    /// Generic helper method to execute any process with standard configuration
-    /// </summary>
-    private static async Task<(int ExitCode, string Output, string Error)> ExecuteProcessAsync(string fileName, string arguments, CancellationToken cancellationToken)
-    {
-        Console.WriteLine($"[DEBUG] Executing process: {fileName} {arguments}");
-        var startTime = DateTime.UtcNow;
-
-        try
-        {
-            var process = new Process
-            {
-                StartInfo = new ProcessStartInfo
-                {
-                    FileName = fileName,
-                    Arguments = arguments,
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    CreateNoWindow = true
-                }
-            };
-
-            process.Start();
-            var output = await process.StandardOutput.ReadToEndAsync(cancellationToken);
-            var error = await process.StandardError.ReadToEndAsync(cancellationToken);
-            await process.WaitForExitAsync(cancellationToken);
-
-            var endTime = DateTime.UtcNow;
-            var exitCode = process.ExitCode;
-            Console.WriteLine($"[DEBUG] Process completed in {(endTime - startTime).TotalSeconds:F1}s, exit code: {exitCode}");
-
-            if (exitCode != 0)
-            {
-                Console.WriteLine($"[DEBUG] Process error output: {error}");
-            }
-
-            return (exitCode, output, error);
-        }
-        catch (Exception ex)
-        {
-            var endTime = DateTime.UtcNow;
-            Console.WriteLine($"[DEBUG] Process execution failed in {(endTime - startTime).TotalSeconds:F1}s: {ex.Message}");
-            return (-1, "", ex.Message);
-        }
-    }
-
-    /// <summary>
-    /// Execute Docker commands with standardized error handling
-    /// </summary>
-    private static async Task<(int ExitCode, string Output, string Error)> ExecuteDockerCommand(string arguments, CancellationToken cancellationToken)
-    {
-        return await ExecuteProcessAsync("docker", arguments, cancellationToken);
-    }
-
-    /// <summary>
-    /// Execute Docker Compose commands with standardized error handling
-    /// </summary>
-    private static async Task<(int ExitCode, string Output, string Error)> ExecuteDockerComposeCommand(string arguments, CancellationToken cancellationToken)
-    {
-        return await ExecuteProcessAsync("docker-compose", arguments, cancellationToken);
-    }
-
-    /// <summary>
-    /// Execute Docker login with password via stdin
-    /// </summary>
-    private static async Task<(int ExitCode, string Output, string Error)> ExecuteDockerLogin(string registryUrl, string username, string password, CancellationToken cancellationToken)
-    {
-        Console.WriteLine($"[DEBUG] Executing Docker login to {registryUrl} with username {username}");
-        var startTime = DateTime.UtcNow;
-
-        try
-        {
-            var process = new Process
-            {
-                StartInfo = new ProcessStartInfo
-                {
-                    FileName = "docker",
-                    Arguments = $"login {registryUrl} --username {username} --password-stdin",
-                    UseShellExecute = false,
-                    RedirectStandardInput = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    CreateNoWindow = true
-                }
-            };
-
-            process.Start();
-            await process.StandardInput.WriteLineAsync(password);
-            await process.StandardInput.FlushAsync();
-            process.StandardInput.Close();
-
-            var output = await process.StandardOutput.ReadToEndAsync(cancellationToken);
-            var error = await process.StandardError.ReadToEndAsync(cancellationToken);
-            await process.WaitForExitAsync(cancellationToken);
-
-            var endTime = DateTime.UtcNow;
-            var exitCode = process.ExitCode;
-            Console.WriteLine($"[DEBUG] Docker login completed in {(endTime - startTime).TotalSeconds:F1}s, exit code: {exitCode}");
-
-            if (exitCode != 0)
-            {
-                Console.WriteLine($"[DEBUG] Docker login error output: {error}");
-            }
-
-            return (exitCode, output, error);
-        }
-        catch (Exception ex)
-        {
-            var endTime = DateTime.UtcNow;
-            Console.WriteLine($"[DEBUG] Docker login failed in {(endTime - startTime).TotalSeconds:F1}s: {ex.Message}");
-            return (-1, "", ex.Message);
-        }
-    }
-
-    /// <summary>
-    /// Reads configuration defaults from the DockerSSH section
-    /// </summary>
-    private DockerSSHConfiguration GetConfigurationDefaults(DeployingContext context)
-    {
-        var configuration = context.Services.GetService<IConfiguration>();
-        var dockerSSHSection = configuration?.GetSection("DockerSSH");
-        
-        // Get SSH key path from configuration and resolve if it's just a key name
-        var configuredKeyPath = dockerSSHSection?.GetValue<string>("SshKeyPath");
-        var resolvedKeyPath = ResolveSSHKeyPath(configuredKeyPath);
-        
-        return new DockerSSHConfiguration
-        {
-            // SSH Configuration defaults
-            SshHost = dockerSSHSection?.GetValue<string>("SshHost"),
-            SshUsername = dockerSSHSection?.GetValue<string>("SshUsername"),
-            SshPort = dockerSSHSection?.GetValue<string>("SshPort") ?? "22",
-            SshKeyPath = resolvedKeyPath,
-            RemoteDeployPath = dockerSSHSection?.GetValue<string>("RemoteDeployPath"),
-            
-            // Docker Registry Configuration defaults
-            RegistryUrl = dockerSSHSection?.GetValue<string>("RegistryUrl") ?? "docker.io",
-            RepositoryPrefix = dockerSSHSection?.GetValue<string>("RepositoryPrefix"),
-            RegistryUsername = dockerSSHSection?.GetValue<string>("RegistryUsername")
-        };
-    }
-
-    /// <summary>
-    /// Resolves SSH key path from configuration. If the path is just a key name (no path separators),
-    /// it assumes the key is in the ~/.ssh directory. Otherwise, returns the path as-is.
-    /// </summary>
-    private static string? ResolveSSHKeyPath(string? configuredKeyPath)
-    {
-        if (string.IsNullOrEmpty(configuredKeyPath))
-        {
-            return null;
-        }
-
-        // If the configured path contains path separators, treat it as a full path
-        if (configuredKeyPath.Contains('/') || configuredKeyPath.Contains('\\') || configuredKeyPath.Contains(':'))
-        {
-            return configuredKeyPath;
-        }
-
-        // Otherwise, treat it as a key name and resolve to ~/.ssh/{keyname}
-        var homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        var sshDir = Path.Combine(homeDir, ".ssh");
-        var resolvedPath = Path.Combine(sshDir, configuredKeyPath);
-
-        // Only return the resolved path if the file actually exists
-        return File.Exists(resolvedPath) ? resolvedPath : configuredKeyPath;
     }
 }
 
