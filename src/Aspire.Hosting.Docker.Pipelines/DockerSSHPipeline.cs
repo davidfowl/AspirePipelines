@@ -216,15 +216,14 @@ internal class DockerSSHPipeline : IAsyncDisposable
         }
 
         // Local function for single text input prompts
-        async Task<string> PromptForSingleText(string title, string description, string label, string placeholder, bool required = true)
+        async Task<string> PromptForSingleText(string title, string description, string label, bool required = true)
         {
             var inputs = new InteractionInput[]
             {
                 new() {
                     Required = required,
                     InputType = InputType.Text,
-                    Label = label,
-                    Placeholder = placeholder
+                    Label = label
                 }
             };
 
@@ -261,8 +260,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
                 return await PromptForSingleText(
                     "Custom Host Configuration",
                     "Please enter the custom host details.",
-                    "Custom Host",
-                    "Enter the target server hostname or IP address"
+                    "Custom Host"
                 );
             }
 
@@ -294,8 +292,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
                 return await PromptForSingleText(
                     "Custom SSH Key Configuration",
                     "Please enter the path to your SSH private key file.",
-                    "Custom SSH Key Path",
-                    "Enter the full path to your SSH private key file"
+                    "Custom SSH Key Path"
                 );
             }
 
@@ -318,9 +315,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
                 new() { 
                     InputType = InputType.SecretText, 
                     Label = "SSH Password", 
-                    Placeholder = string.IsNullOrEmpty(sshKeyPath) ? 
-                        "Enter SSH password (required for password authentication)" : 
-                        "Enter SSH password (optional, leave blank for key-only auth)"
+
                 },
                 new() {
                     InputType = InputType.Text,
@@ -853,25 +848,21 @@ internal class DockerSSHPipeline : IAsyncDisposable
                 Required = true,
                 InputType = InputType.Text,
                 Label = "Container Registry URL",
-                Placeholder = "Enter registry URL (e.g., docker.io, ghcr.io, your-registry.com:5000)",
                 Value = !string.IsNullOrEmpty(configDefaults.RegistryUrl) ? configDefaults.RegistryUrl : "docker.io"
             },
             new() {
                 InputType = InputType.Text,
                 Label = "Image Repository Prefix",
-                Placeholder = "Optional: Enter repository prefix (e.g., mycompany/myproject)",
                 Value = configDefaults.RepositoryPrefix
             },
             new() {
                 InputType = InputType.Text,
                 Label = "Registry Username",
-                Placeholder = "Enter your registry username",
                 Value = configDefaults.RegistryUsername
             },
             new() {
                 InputType = InputType.SecretText,
                 Label = "Registry Password/Token",
-                Placeholder = "Enter your registry password or access token"
             }
         };
 
@@ -1055,7 +1046,6 @@ internal class DockerSSHPipeline : IAsyncDisposable
             {
                 InputType = isSensitive ? InputType.SecretText : InputType.Text,
                 Label = $"Environment Variable: {key}",
-                Placeholder = isImageVar ? "Container image (auto-populated from registry)" : $"Enter value for {key}",
                 Value = string.IsNullOrEmpty(value) ? null : value,
                 Required = string.IsNullOrEmpty(value) || !isImageVar
             });
