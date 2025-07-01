@@ -5,14 +5,15 @@ namespace Aspire.Hosting.Docker.Pipelines.Utilities;
 
 public static class PortInformationUtility
 {
-    public static async Task<string> ExtractPortInformation(string deployPath, SshClient sshClient, CancellationToken cancellationToken)
+    public static async Task<Dictionary<string, List<string>>> ExtractPortInformation(string deployPath, SshClient sshClient, CancellationToken cancellationToken)
     {
         if (sshClient == null || !sshClient.IsConnected)
         {
-            return "SSH connection not available";
+            return new Dictionary<string, List<string>>();
         }
 
         var host = sshClient.ConnectionInfo?.Host ?? "localhost";
+        var serviceUrls = new Dictionary<string, List<string>>();
 
         // Method 1: Try to get port mappings from running containers using docker compose ps
         // Expected output format (JSON):
@@ -24,10 +25,10 @@ public static class PortInformationUtility
 
         if (composePortResult.ExitCode == 0 && !string.IsNullOrEmpty(composePortResult.Output))
         {
-            var ports = ExtractPortsFromComposeJson(composePortResult.Output);
-            if (ports.Any())
+            var containerPorts = ExtractPortsFromComposeJson(composePortResult.Output, host);
+            if (containerPorts.Any())
             {
-                return $"Service URLs: {string.Join(", ", ports.Select(p => $"http://{host}:{p}"))}";
+                return containerPorts;
             }
         }
 
@@ -43,10 +44,10 @@ public static class PortInformationUtility
 
         if (dockerPortResult.ExitCode == 0 && !string.IsNullOrEmpty(dockerPortResult.Output))
         {
-            var ports = ExtractPortsFromDockerPs(dockerPortResult.Output);
-            if (ports.Any())
+            var containerPorts = ExtractPortsFromDockerPs(dockerPortResult.Output, host);
+            if (containerPorts.Any())
             {
-                return $"Container URLs: {string.Join(", ", ports.Select(p => $"http://{host}:{p}"))}";
+                return containerPorts;
             }
         }
 
@@ -67,10 +68,10 @@ public static class PortInformationUtility
 
         if (composeFileResult.ExitCode == 0 && !string.IsNullOrEmpty(composeFileResult.Output))
         {
-            var ports = ExtractPortsFromComposeFile(composeFileResult.Output);
-            if (ports.Any())
+            var containerPorts = ExtractPortsFromComposeFile(composeFileResult.Output, host);
+            if (containerPorts.Any())
             {
-                return $"Configured URLs: {string.Join(", ", ports.Select(p => $"http://{host}:{p}"))}";
+                return containerPorts;
             }
         }
 
@@ -93,19 +94,21 @@ public static class PortInformationUtility
 
             if (ports.Any())
             {
-                return $"Exposed URLs: {string.Join(", ", ports.Select(p => $"http://{host}:{p}"))}";
+                // For fallback method, we don't have container names, so use a generic key
+                serviceUrls["unknown-services"] = ports.Select(p => $"http://{host}:{p}").ToList();
+                return serviceUrls;
             }
         }
 
-        return "No exposed ports detected";
+        return serviceUrls;
     }
 
-    private static List<string> ExtractPortsFromComposeJson(string jsonOutput)
+    private static Dictionary<string, List<string>> ExtractPortsFromComposeJson(string jsonOutput, string host)
     {
         // Parse JSON output from docker compose ps --format json
-        // Example input line: {"Publishers":[{"URL":"","TargetPort":80,"PublishedPort":8080,"Protocol":"tcp"}]}
-        // We want to extract the PublishedPort values (8080 in this example)
-        var ports = new List<string>();
+        // Example input line: {"Name":"myapp-web-1","Publishers":[{"URL":"","TargetPort":80,"PublishedPort":8080,"Protocol":"tcp"}]}
+        // We want to extract container names and their published ports
+        var serviceUrls = new Dictionary<string, List<string>>();
 
         try
         {
@@ -120,15 +123,21 @@ public static class PortInformationUtility
                 try
                 {
                     var container = JsonSerializer.Deserialize<DockerComposeContainer>(line, jsonOptions);
-                    if (container?.Publishers != null)
+                    if (container?.Publishers != null && !string.IsNullOrEmpty(container.Name))
                     {
+                        var urls = new List<string>();
                         foreach (var publisher in container.Publishers)
                         {
                             // Exclude invalid ports: 0, negative numbers, and ports outside valid range (1-65535)
                             if (IsValidPort(publisher.PublishedPort))
                             {
-                                ports.Add(publisher.PublishedPort.ToString());
+                                urls.Add($"http://{host}:{publisher.PublishedPort}");
                             }
+                        }
+                        
+                        if (urls.Any())
+                        {
+                            serviceUrls[container.Name] = urls;
                         }
                     }
                 }
@@ -141,71 +150,148 @@ public static class PortInformationUtility
         }
         catch (Exception)
         {
-            // Ignore parsing errors and return empty list
+            // Ignore parsing errors and return empty dictionary
         }
 
-        return ports.Distinct().ToList();
+        return serviceUrls;
     }
 
-    private static List<string> ExtractPortsFromDockerPs(string dockerPsOutput)
+    private static Dictionary<string, List<string>> ExtractPortsFromDockerPs(string dockerPsOutput, string host)
     {
         // Parse docker ps table output
         // Example input: "myapp-web-1    0.0.0.0:8080->80/tcp, 0.0.0.0:8443->443/tcp"
-        // We want to extract the host ports (8080, 8443 in this example)
-        var ports = new List<string>();
+        // We want to extract container names and their host ports (8080, 8443 in this example)
+        var serviceUrls = new Dictionary<string, List<string>>();
         var lines = dockerPsOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries);
 
         foreach (var line in lines.Skip(1)) // Skip header
         {
-            if (line.Contains("->"))
+            var parts = line.Split('\t', 2, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length >= 2)
             {
-                // Extract ports from format like "0.0.0.0:8080->80/tcp"
-                var portMatches = System.Text.RegularExpressions.Regex.Matches(
-                    line, @"0\.0\.0\.0:(\d+)->");
-
-                foreach (System.Text.RegularExpressions.Match match in portMatches)
+                var containerName = parts[0].Trim();
+                var portsSection = parts[1].Trim();
+                
+                if (portsSection.Contains("->"))
                 {
-                    var portString = match.Groups[1].Value;
-                    if (IsValidPortString(portString))
+                    var urls = new List<string>();
+                    
+                    // Extract ports from format like "0.0.0.0:8080->80/tcp"
+                    var portMatches = System.Text.RegularExpressions.Regex.Matches(
+                        portsSection, @"0\.0\.0\.0:(\d+)->");
+
+                    foreach (System.Text.RegularExpressions.Match match in portMatches)
                     {
-                        ports.Add(portString);
+                        var portString = match.Groups[1].Value;
+                        if (IsValidPortString(portString))
+                        {
+                            urls.Add($"http://{host}:{portString}");
+                        }
+                    }
+                    
+                    if (urls.Any())
+                    {
+                        serviceUrls[containerName] = urls.Distinct().ToList();
                     }
                 }
             }
         }
-        return ports.Distinct().ToList();
+        return serviceUrls;
     }
 
-    private static List<string> ExtractPortsFromComposeFile(string composeContent)
+    private static Dictionary<string, List<string>> ExtractPortsFromComposeFile(string composeContent, string host)
     {
         // Parse docker-compose.yml/yaml content for port mappings
         // Example input lines we're looking for:
-        //   - "8080:80"
-        //   - 3000:3000
-        //   ports:
-        //     - "8443:443"
-        // We want to extract the host ports (8080, 3000, 8443 in these examples)
-        var ports = new List<string>();
+        //   services:
+        //     web:
+        //       ports:
+        //         - "8080:80"
+        //         - 3000:3000
+        //     api:
+        //       ports:
+        //         - "8443:443"
+        // We want to extract service names and their host ports (8080, 3000, 8443 in these examples)
+        var serviceUrls = new Dictionary<string, List<string>>();
         var lines = composeContent.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        
+        string? currentService = null;
+        bool inPortsSection = false;
 
         foreach (var line in lines)
         {
             var trimmedLine = line.Trim();
+            var originalLine = line;
 
-            // Match port mappings like "8080:80", "- 8080:80", "- "8080:80""
-            var portMatch = System.Text.RegularExpressions.Regex.Match(
-                trimmedLine, @"(?:^-\s*[""']?|^[""']?)(\d+):(?:\d+)(?:[""']?\s*$|[""']?$)");
-
-            if (portMatch.Success)
+            // Check if we're starting a new service section
+            if (originalLine.Length > 0 && !char.IsWhiteSpace(originalLine[0]) && trimmedLine.EndsWith(':') && !trimmedLine.StartsWith('#'))
             {
-                var portString = portMatch.Groups[1].Value;
-                if (IsValidPortString(portString))
+                // This is a top-level section
+                if (trimmedLine == "services:")
                 {
-                    ports.Add(portString);
+                    currentService = null;
+                    inPortsSection = false;
+                    continue;
+                }
+                else
+                {
+                    // Reset service context when we hit other top-level sections
+                    currentService = null;
+                    inPortsSection = false;
+                }
+            }
+            
+            // Check if we're in a service definition (indented under services)
+            if (currentService == null && originalLine.StartsWith("  ") && !originalLine.StartsWith("    ") && trimmedLine.EndsWith(':'))
+            {
+                // This is a service name (2-space indented under services)
+                currentService = trimmedLine.TrimEnd(':');
+                inPortsSection = false;
+                continue;
+            }
+
+            // Check if we're starting a ports section within a service
+            if (currentService != null && trimmedLine == "ports:")
+            {
+                inPortsSection = true;
+                continue;
+            }
+
+            // Reset ports section flag if we encounter another service property
+            if (currentService != null && inPortsSection && originalLine.StartsWith("    ") && trimmedLine.EndsWith(':') && !trimmedLine.StartsWith('-'))
+            {
+                inPortsSection = false;
+            }
+
+            // Parse port mappings within the ports section
+            if (currentService != null && inPortsSection)
+            {
+                // Match port mappings like "- 8080:80", "- "8080:80""
+                var portMatch = System.Text.RegularExpressions.Regex.Match(
+                    trimmedLine, @"(?:^-\s*[""']?|^[""']?)(\d+):(?:\d+)(?:[""']?\s*$|[""']?$)");
+
+                if (portMatch.Success)
+                {
+                    var portString = portMatch.Groups[1].Value;
+                    if (IsValidPortString(portString))
+                    {
+                        if (!serviceUrls.ContainsKey(currentService))
+                        {
+                            serviceUrls[currentService] = new List<string>();
+                        }
+                        serviceUrls[currentService].Add($"http://{host}:{portString}");
+                    }
                 }
             }
         }
-        return ports.Distinct().ToList();
+        
+        // Remove duplicates from each service's URL list
+        foreach (var service in serviceUrls.Keys.ToList())
+        {
+            serviceUrls[service] = serviceUrls[service].Distinct().ToList();
+        }
+        
+        return serviceUrls;
     }
 
     private static async Task<(int ExitCode, string Output, string Error)> ExecuteSSHCommandWithOutput(SshClient? sshClient, string command, CancellationToken cancellationToken)

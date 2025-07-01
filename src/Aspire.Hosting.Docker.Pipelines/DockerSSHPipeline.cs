@@ -8,7 +8,6 @@ using Aspire.Hosting.Docker.Pipelines.Utilities;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Renci.SshNet;
-using System.Diagnostics;
 using Aspire.Hosting.Docker.Pipelines.Models;
 
 internal class DockerSSHPipeline : IAsyncDisposable
@@ -149,7 +148,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
         static List<KeyValuePair<string, string>> BuildHostOptions(DockerSSHConfiguration configDefaults, SSHConfiguration sshConfig)
         {
             var hostOptions = new List<KeyValuePair<string, string>>();
-            
+
             // Add config default first if available
             if (!string.IsNullOrEmpty(configDefaults.SshHost))
             {
@@ -175,7 +174,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
         static List<KeyValuePair<string, string>> BuildSshKeyOptions(SSHConfiguration sshConfig)
         {
             var sshKeyOptions = new List<KeyValuePair<string, string>>();
-            
+
             // Add discovered SSH keys
             foreach (var keyPath in sshConfig.AvailableKeyPaths)
             {
@@ -277,7 +276,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
         {
             // First prompt: SSH authentication method selection
             var defaultKeyPath = !string.IsNullOrEmpty(configDefaults.SshKeyPath) ? configDefaults.SshKeyPath : (sshConfig.DefaultKeyPath ?? "");
-            
+
             var selectedKeyPath = await PromptForChoice(
                 "SSH Authentication Method",
                 "Please select how you want to authenticate with the SSH server.",
@@ -312,9 +311,9 @@ internal class DockerSSHPipeline : IAsyncDisposable
                     Label = "SSH Username",
                     Value = configDefaults.SshUsername ?? "root"
                 },
-                new() { 
-                    InputType = InputType.SecretText, 
-                    Label = "SSH Password", 
+                new() {
+                    InputType = InputType.SecretText,
+                    Label = "SSH Password",
 
                 },
                 new() {
@@ -667,11 +666,14 @@ internal class DockerSSHPipeline : IAsyncDisposable
             $"cd {deployPath} && (docker compose ps || docker-compose ps)", cancellationToken);
 
         // Try to extract port information
-        var portsInfo = await PortInformationUtility.ExtractPortInformation(deployPath, _sshClient!, cancellationToken);
+        var serviceUrls = await PortInformationUtility.ExtractPortInformation(deployPath, _sshClient!, cancellationToken);
+
+        // Format port information as a nice table
+        var serviceTable = FormatServiceUrlsAsTable(serviceUrls);
 
         await healthTask.SucceedAsync($"Services are healthy and ready\nCommand: cd {deployPath} && (docker compose ps || docker-compose ps)\nFinal status:\n{statusResult.Output.Trim()}", cancellationToken: cancellationToken);
 
-        return $"Services running: {healthyServices} containers healthy. {portsInfo}";
+        return $"Services running: {healthyServices} containers healthy.\n{serviceTable}";
     }
 
     private async Task TransferFile(string localPath, string remotePath, CancellationToken cancellationToken)
@@ -1071,9 +1073,9 @@ internal class DockerSSHPipeline : IAsyncDisposable
 
         // Step 5: Process user input and create final environment file
         await using var finalizeStep = await context.ProgressReporter.CreateStepAsync("Finalizing environment configuration", cancellationToken);
-        
+
         await using var envFileTask = await finalizeStep.CreateTaskAsync("Creating and transferring environment file", cancellationToken);
-        
+
         try
         {
             // Step 5: Prepare final environment content and write to remote
@@ -1099,10 +1101,10 @@ internal class DockerSSHPipeline : IAsyncDisposable
             {
                 await envFileTask.UpdateAsync("Writing environment file to temporary location...", cancellationToken);
                 await File.WriteAllTextAsync(tempFile, envContent, cancellationToken);
-                
+
                 await envFileTask.UpdateAsync($"Transferring environment file to remote path: {remoteEnvPath}", cancellationToken);
                 await TransferFile(tempFile, remoteEnvPath, cancellationToken);
-                
+
                 await envFileTask.SucceedAsync($"Environment file successfully transferred to {remoteEnvPath}", cancellationToken);
             }
             finally
@@ -1112,7 +1114,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
                     File.Delete(tempFile);
                 }
             }
-            
+
             await finalizeStep.SucceedAsync($"Environment configuration finalized with {finalEnvVars.Count} variables");
         }
         catch (Exception ex)
@@ -1121,6 +1123,140 @@ internal class DockerSSHPipeline : IAsyncDisposable
             await finalizeStep.FailAsync($"Environment configuration failed: {ex.Message}");
             throw;
         }
+    }
+
+    private static string FormatServiceUrlsAsTable(Dictionary<string, List<string>> serviceUrls)
+    {
+        if (serviceUrls.Count == 0)
+        {
+            return "No exposed ports detected";
+        }
+
+        // Remove duplicates and clean up the data
+        var cleanedServiceUrls = new Dictionary<string, List<string>>();
+        foreach (var (serviceName, urls) in serviceUrls)
+        {
+            var uniqueUrls = urls.Distinct().OrderBy(u => u).ToList();
+            if (uniqueUrls.Count > 0)
+            {
+                cleanedServiceUrls[serviceName] = uniqueUrls;
+            }
+        }
+
+        // Remove common prefix from service names if applicable
+        var serviceNames = cleanedServiceUrls.Keys.ToList();
+        var commonPrefix = FindCommonPrefix(serviceNames);
+
+        // Only remove prefix if it's meaningful (at least 3 characters and applies to multiple services)
+        var displayServiceUrls = cleanedServiceUrls;
+        if (commonPrefix.Length >= 3 && serviceNames.Count > 1)
+        {
+            displayServiceUrls = new Dictionary<string, List<string>>();
+            foreach (var (serviceName, urls) in cleanedServiceUrls)
+            {
+                var displayName = serviceName.StartsWith(commonPrefix)
+                    ? serviceName[commonPrefix.Length..].TrimStart('-', '_', '.')
+                    : serviceName;
+
+                // Ensure we don't end up with empty names
+                if (string.IsNullOrEmpty(displayName))
+                {
+                    displayName = serviceName;
+                }
+
+                displayServiceUrls[displayName] = urls;
+            }
+        }
+
+        var lines = new List<string>();
+
+        // Calculate max widths for better formatting
+        var maxServiceNameWidth = Math.Max(15, displayServiceUrls.Keys.Max(k => k.Length));
+        var maxUrlWidth = Math.Max(25, displayServiceUrls.Values.SelectMany(v => v).DefaultIfEmpty("").Max(u => u.Length));
+
+        // Limit column widths for readability
+        var serviceColWidth = Math.Min(maxServiceNameWidth, 35);
+        var urlColWidth = Math.Min(maxUrlWidth, 65);
+
+        // Add table header
+        lines.Add("\n📋 Service URLs:");
+        lines.Add("┌" + new string('─', serviceColWidth + 2) + "┬" + new string('─', urlColWidth + 2) + "┐");
+        lines.Add($"│ {"Service".PadRight(serviceColWidth)} │ {"URL".PadRight(urlColWidth)} │");
+        lines.Add("├" + new string('─', serviceColWidth + 2) + "┼" + new string('─', urlColWidth + 2) + "┤");
+
+        var hasAnyUrls = false;
+
+        // Add service URLs
+        foreach (var (serviceName, urls) in displayServiceUrls.OrderBy(kvp => kvp.Key))
+        {
+            if (urls.Count == 0)
+            {
+                // Service with no exposed URLs
+                var serviceCol = serviceName.Length > serviceColWidth
+                    ? serviceName[..(serviceColWidth - 3)] + "..."
+                    : serviceName.PadRight(serviceColWidth);
+                var urlCol = "⚠️ (no exposed ports)".PadRight(urlColWidth);
+                lines.Add($"│ {serviceCol} │ {urlCol} │");
+            }
+            else
+            {
+                hasAnyUrls = true;
+                // Service with URLs - show service name only on first row
+                for (int i = 0; i < urls.Count; i++)
+                {
+                    var serviceCol = i == 0
+                        ? (serviceName.Length > serviceColWidth
+                            ? serviceName[..(serviceColWidth - 3)] + "..."
+                            : serviceName.PadRight(serviceColWidth))
+                        : "".PadRight(serviceColWidth);
+
+                    var url = urls[i];
+                    var displayUrl = url.Length > urlColWidth
+                        ? url[..(urlColWidth - 3)] + "..."
+                        : url;
+
+                    // Format URL with appropriate icon/spacing
+                    var formattedUrl = i == 0 ? $"✅ {displayUrl}" : $"   {displayUrl}";
+                    formattedUrl = formattedUrl.PadRight(urlColWidth);
+
+                    lines.Add($"│ {serviceCol} │ {formattedUrl} │");
+                }
+            }
+        }
+
+        // Add table footer
+        lines.Add("└" + new string('─', serviceColWidth + 2) + "┴" + new string('─', urlColWidth + 2) + "┘");
+
+        // Add helpful note if there are URLs
+        if (hasAnyUrls)
+        {
+            lines.Add("💡 Click or copy URLs above to access your deployed services!");
+        }
+
+        return string.Join("\n", lines);
+    }
+
+    private static string FindCommonPrefix(List<string> strings)
+    {
+        if (strings.Count == 0)
+            return "";
+
+        if (strings.Count == 1)
+            return "";
+
+        var prefix = strings[0];
+        for (int i = 1; i < strings.Count; i++)
+        {
+            while (prefix.Length > 0 && !strings[i].StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                prefix = prefix[..^1];
+            }
+
+            if (prefix.Length == 0)
+                break;
+        }
+
+        return prefix;
     }
 
     internal class SSHConnectionContext
