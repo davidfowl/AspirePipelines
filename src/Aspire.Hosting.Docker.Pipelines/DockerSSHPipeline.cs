@@ -145,149 +145,248 @@ internal class DockerSSHPipeline : IAsyncDisposable
 
     private async Task<SSHConnectionContext> PrepareSSHConnectionContext(DeployingContext context, DockerSSHConfiguration configDefaults, IInteractionService interactionService)
     {
+        // Local function to build host options for selection
+        static List<KeyValuePair<string, string>> BuildHostOptions(DockerSSHConfiguration configDefaults, SSHConfiguration sshConfig)
+        {
+            var hostOptions = new List<KeyValuePair<string, string>>();
+            
+            // Add config default first if available
+            if (!string.IsNullOrEmpty(configDefaults.SshHost))
+            {
+                hostOptions.Add(new KeyValuePair<string, string>(configDefaults.SshHost, $"{configDefaults.SshHost} (configured)"));
+            }
+
+            // Add discovered known hosts (avoid duplicates)
+            foreach (var host in sshConfig.KnownHosts)
+            {
+                if (string.IsNullOrEmpty(configDefaults.SshHost) || host != configDefaults.SshHost)
+                {
+                    hostOptions.Add(new KeyValuePair<string, string>(host, host));
+                }
+            }
+
+            // Add custom host option
+            hostOptions.Add(new KeyValuePair<string, string>("CUSTOM", "Enter custom host..."));
+
+            return hostOptions;
+        }
+
+        // Local function to build SSH key options for selection
+        static List<KeyValuePair<string, string>> BuildSshKeyOptions(SSHConfiguration sshConfig)
+        {
+            var sshKeyOptions = new List<KeyValuePair<string, string>>();
+            
+            // Add discovered SSH keys
+            foreach (var keyPath in sshConfig.AvailableKeyPaths)
+            {
+                var keyName = Path.GetFileName(keyPath);
+                sshKeyOptions.Add(new KeyValuePair<string, string>(keyPath, keyName));
+            }
+
+            // Add password authentication option
+            sshKeyOptions.Add(new KeyValuePair<string, string>("", "Password Authentication (no key)"));
+
+            // Add custom key option
+            sshKeyOptions.Add(new KeyValuePair<string, string>("CUSTOM", "Enter custom key path..."));
+
+            return sshKeyOptions;
+        }
+
+        // Local function for choice prompts
+        async Task<string> PromptForChoice(string title, string description, string label, List<KeyValuePair<string, string>> options, string? defaultValue = null)
+        {
+            var inputs = new InteractionInput[]
+            {
+                new() {
+                    InputType = InputType.Choice,
+                    Label = label,
+                    Options = options,
+                    Value = defaultValue ?? options.FirstOrDefault().Key
+                }
+            };
+
+            var result = await interactionService.PromptInputsAsync(title, description, inputs);
+
+            if (result.Canceled)
+            {
+                throw new InvalidOperationException($"{title} was canceled");
+            }
+
+            return result.Data[0].Value ?? "";
+        }
+
+        // Local function for single text input prompts
+        async Task<string> PromptForSingleText(string title, string description, string label, string placeholder, bool required = true)
+        {
+            var inputs = new InteractionInput[]
+            {
+                new() {
+                    Required = required,
+                    InputType = InputType.Text,
+                    Label = label,
+                    Placeholder = placeholder
+                }
+            };
+
+            var result = await interactionService.PromptInputsAsync(title, description, inputs);
+
+            if (result.Canceled)
+            {
+                throw new InvalidOperationException($"{title} was canceled");
+            }
+
+            var value = result.Data[0].Value;
+            if (required && string.IsNullOrEmpty(value))
+            {
+                throw new InvalidOperationException($"{label} is required");
+            }
+
+            return value ?? "";
+        }
+
+        // Local function to prompt for target host
+        async Task<string> PromptForTargetHost(List<KeyValuePair<string, string>> hostOptions)
+        {
+            // First prompt: Target host selection
+            var selectedHost = await PromptForChoice(
+                "Target Host Selection",
+                "Please select the target server for deployment.",
+                "Target Server Host",
+                hostOptions
+            );
+
+            // Second prompt: Custom host if needed
+            if (selectedHost == "CUSTOM")
+            {
+                return await PromptForSingleText(
+                    "Custom Host Configuration",
+                    "Please enter the custom host details.",
+                    "Custom Host",
+                    "Enter the target server hostname or IP address"
+                );
+            }
+
+            if (string.IsNullOrEmpty(selectedHost))
+            {
+                throw new InvalidOperationException("Target server host is required");
+            }
+
+            return selectedHost;
+        }
+
+        // Local function to prompt for SSH key path
+        async Task<string?> PromptForSshKeyPath(List<KeyValuePair<string, string>> sshKeyOptions, DockerSSHConfiguration configDefaults, SSHConfiguration sshConfig)
+        {
+            // First prompt: SSH authentication method selection
+            var defaultKeyPath = !string.IsNullOrEmpty(configDefaults.SshKeyPath) ? configDefaults.SshKeyPath : (sshConfig.DefaultKeyPath ?? "");
+            
+            var selectedKeyPath = await PromptForChoice(
+                "SSH Authentication Method",
+                "Please select how you want to authenticate with the SSH server.",
+                "SSH Authentication Method",
+                sshKeyOptions,
+                defaultKeyPath
+            );
+
+            // Second prompt: Custom key path if needed
+            if (selectedKeyPath == "CUSTOM")
+            {
+                return await PromptForSingleText(
+                    "Custom SSH Key Configuration",
+                    "Please enter the path to your SSH private key file.",
+                    "Custom SSH Key Path",
+                    "Enter the full path to your SSH private key file"
+                );
+            }
+
+            // Return the selected key path (could be empty for password auth, or an actual path)
+            return string.IsNullOrEmpty(selectedKeyPath) ? null : selectedKeyPath;
+        }
+
+        // Local function to prompt for SSH details
+        async Task<(string SshUsername, string? SshPassword, string SshPort, string RemoteDeployPath)> PromptForSshDetails(
+            string targetHost, string? sshKeyPath, DockerSSHConfiguration configDefaults, SSHConfiguration sshConfig)
+        {
+            var inputs = new InteractionInput[]
+            {
+                new() {
+                    Required = true,
+                    InputType = InputType.Text,
+                    Label = "SSH Username",
+                    Value = configDefaults.SshUsername ?? "root"
+                },
+                new() { 
+                    InputType = InputType.SecretText, 
+                    Label = "SSH Password", 
+                    Placeholder = string.IsNullOrEmpty(sshKeyPath) ? 
+                        "Enter SSH password (required for password authentication)" : 
+                        "Enter SSH password (optional, leave blank for key-only auth)"
+                },
+                new() {
+                    InputType = InputType.Text,
+                    Label = "SSH Port",
+                    Value = !string.IsNullOrEmpty(configDefaults.SshPort) && configDefaults.SshPort != "22" ? configDefaults.SshPort : "22"
+                },
+                new() {
+                    InputType = InputType.Text,
+                    Label = "Remote Deploy Path",
+                    Value = !string.IsNullOrEmpty(configDefaults.RemoteDeployPath) ? configDefaults.RemoteDeployPath : sshConfig.DefaultDeployPath
+                }
+            };
+
+            var result = await interactionService.PromptInputsAsync(
+                $"SSH Configuration for {targetHost}",
+                $"Please provide the SSH configuration details for connecting to {targetHost}.",
+                inputs
+            );
+
+            if (result.Canceled)
+            {
+                throw new InvalidOperationException("SSH configuration was canceled");
+            }
+
+            var sshUsername = result.Data[0].Value ?? throw new InvalidOperationException("SSH username is required");
+            var sshPassword = string.IsNullOrEmpty(result.Data[1].Value) ? null : result.Data[1].Value;
+            var sshPort = result.Data[2].Value ?? "22";
+            var remoteDeployPath = result.Data[3].Value ?? $"/home/{sshUsername}/aspire-app";
+
+            return (sshUsername, sshPassword, sshPort, remoteDeployPath);
+        }
+
+        // Main method logic starts here
         // Discover SSH configuration
         var sshConfig = await SSHConfigurationDiscovery.DiscoverSSHConfiguration(context);
 
-        // Prepare SSH key options
-        var sshKeyOptions = new List<KeyValuePair<string, string>>();
-        foreach (var keyPath in sshConfig.AvailableKeyPaths)
-        {
-            var keyName = Path.GetFileName(keyPath);
-            sshKeyOptions.Add(new KeyValuePair<string, string>(keyPath, keyName));
-        }
+        // Build host options for selection
+        var hostOptions = BuildHostOptions(configDefaults, sshConfig);
 
-        // Add password authentication option
-        sshKeyOptions.Add(new KeyValuePair<string, string>("", "Password Authentication (no key)"));
+        // Get target host through progressive prompting
+        var targetHost = await PromptForTargetHost(hostOptions);
 
-        // Prepare host options with config default first
-        var hostOptions = new List<KeyValuePair<string, string>>();
-        if (!string.IsNullOrEmpty(configDefaults.SshHost))
-        {
-            hostOptions.Add(new KeyValuePair<string, string>(configDefaults.SshHost, $"{configDefaults.SshHost} (configured)"));
-        }
+        // Build SSH key options for selection
+        var sshKeyOptions = BuildSshKeyOptions(sshConfig);
 
-        // Add discovered known hosts (avoid duplicates)
-        foreach (var host in sshConfig.KnownHosts)
-        {
-            if (string.IsNullOrEmpty(configDefaults.SshHost) || host != configDefaults.SshHost)
-            {
-                hostOptions.Add(new KeyValuePair<string, string>(host, host));
-            }
-        }
+        // Get SSH key path through progressive prompting
+        var sshKeyPath = await PromptForSshKeyPath(sshKeyOptions, configDefaults, sshConfig);
 
-        // Add custom host option
-        hostOptions.Add(new KeyValuePair<string, string>("CUSTOM", "Enter custom host..."));
-
-        // Prompt user for configuration
-        var inputs = new InteractionInput[]
-        {
-            new() {
-                InputType = InputType.Choice,
-                Label = "Target Server Host",
-                Options = hostOptions,
-                Value = hostOptions.FirstOrDefault().Key
-            },
-            new() {
-                InputType = InputType.Text,
-                Label = "Custom Host",
-            },
-            new() {
-                Required = true,
-                InputType = InputType.Text,
-                Label = $"SSH Username",
-                Value = configDefaults.SshUsername ?? "root"
-            },
-            new() { InputType = InputType.SecretText, Label = "SSH Password", Placeholder = "Enter SSH password (leave blank for key-based auth)" },
-            new() {
-                InputType = InputType.Choice,
-                Label = "SSH Authentication Method",
-                Value = !string.IsNullOrEmpty(configDefaults.SshKeyPath) ? configDefaults.SshKeyPath :
-                        (sshConfig.DefaultKeyPath ?? ""),
-                Options = sshKeyOptions
-            },
-            new() {
-                InputType = InputType.Text,
-                Label = "SSH Port",
-                Value = !string.IsNullOrEmpty(configDefaults.SshPort) && configDefaults.SshPort != "22" ? configDefaults.SshPort : "22"
-            },
-            new() {
-                InputType = InputType.Text,
-                Label = "Remote Deploy Path",
-                Value = !string.IsNullOrEmpty(configDefaults.RemoteDeployPath) ? configDefaults.RemoteDeployPath : sshConfig.DefaultDeployPath
-            }
-        };
-
-        var result = await interactionService.PromptInputsAsync(
-            "Deploying to VM with Docker via SSH",
-            "Please provide the deployment configuration for Docker SSH deployment.",
-            inputs
-        );
-
-        if (result.Canceled)
-        {
-            throw new InvalidOperationException("SSH configuration was canceled");
-        }
-
-        // Process user input
-        var selectedHost = result.Data[0].Value ?? "";
-        var customHost = result.Data[1].Value ?? "";
-        var sshUsername = result.Data[2].Value ?? throw new InvalidOperationException("SSH username is required");
-        var sshPassword = string.IsNullOrEmpty(result.Data[3].Value) ? null : result.Data[3].Value;
-        var selectedKeyPath = result.Data[4].Value ?? "";
-        var sshPort = result.Data[5].Value ?? "22";
-        var remoteDeployPath = result.Data[6].Value ?? $"/home/{sshUsername}/aspire-app";
-
-        // Process target host selection
-        string targetHost;
-        if (selectedHost == "CUSTOM")
-        {
-            targetHost = customHost;
-        }
-        else if (!string.IsNullOrEmpty(selectedHost))
-        {
-            targetHost = selectedHost;
-        }
-        else
-        {
-            // Fallback for text input mode
-            targetHost = selectedHost;
-        }
-
-        if (string.IsNullOrEmpty(targetHost))
-        {
-            throw new InvalidOperationException("Target server host is required");
-        }
-
-        // Process SSH key selection
-        string? sshKeyPath = null;
-        if (selectedKeyPath == "CUSTOM")
-        {
-            // User wants to specify custom key path - would need additional input field
-            // For now, leave as null to require password auth
-            sshKeyPath = null;
-        }
-        else if (!string.IsNullOrEmpty(selectedKeyPath))
-        {
-            // User selected a discovered key (selectedKeyPath is the actual path)
-            sshKeyPath = selectedKeyPath;
-        }
-        // Empty selectedKeyPath means password authentication (sshKeyPath remains null)
+        // Get SSH configuration details
+        var sshDetails = await PromptForSshDetails(targetHost, sshKeyPath, configDefaults, sshConfig);
 
         // Validate SSH authentication method
-        if (string.IsNullOrEmpty(sshPassword) && string.IsNullOrEmpty(sshKeyPath))
+        if (string.IsNullOrEmpty(sshDetails.SshPassword) && string.IsNullOrEmpty(sshKeyPath))
         {
             throw new InvalidOperationException("Either SSH password or SSH private key path must be provided");
         }
 
-        // Return only the final user selections
+        // Return the final SSH connection context
         return new SSHConnectionContext
         {
             TargetHost = targetHost,
-            SshUsername = sshUsername,
-            SshPassword = sshPassword,
+            SshUsername = sshDetails.SshUsername,
+            SshPassword = sshDetails.SshPassword,
             SshKeyPath = sshKeyPath,
-            SshPort = sshPort,
-            RemoteDeployPath = remoteDeployPath
+            SshPort = sshDetails.SshPort,
+            RemoteDeployPath = sshDetails.RemoteDeployPath
         };
     }
 
