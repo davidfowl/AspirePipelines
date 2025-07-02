@@ -1,0 +1,5 @@
+<Project>
+  <PropertyGroup>
+    <ContainerRuntimeIdentifier>linux-x64</ContainerRuntimeIdentifier>
+  </PropertyGroup>
+</Project>
