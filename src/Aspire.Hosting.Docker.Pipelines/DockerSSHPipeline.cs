@@ -924,8 +924,8 @@ internal class DockerSSHPipeline : IAsyncDisposable
                 await tagTask.SucceedAsync($"Successfully tagged {serviceName} image: {targetImageName}", cancellationToken: cancellationToken);
             }
 
-            // Task 4: Push images to registry (one task per image)
-            foreach (var (serviceName, targetImageName) in imageTags)
+
+            static async Task PushContainerImageAsync(IPublishingStep step, string serviceName, string targetImageName, CancellationToken cancellationToken)
             {
                 await using var pushTask = await step.CreateTaskAsync($"Pushing {serviceName} image", cancellationToken);
 
@@ -939,6 +939,15 @@ internal class DockerSSHPipeline : IAsyncDisposable
 
                 await pushTask.SucceedAsync($"Successfully pushed {serviceName} image: {targetImageName}", cancellationToken: cancellationToken);
             }
+
+            // Task 4: Push images to registry (one task per image)
+            var tasks = new List<Task>();
+            foreach (var (serviceName, targetImageName) in imageTags)
+            {
+                tasks.Add(PushContainerImageAsync(step, serviceName, targetImageName, cancellationToken));
+            }
+
+            await Task.WhenAll(tasks);
 
             await step.SucceedAsync($"Container images pushed successfully. Tags: {string.Join(", ", imageTags.Select(kvp => $"{kvp.Key}:{kvp.Value}"))}");
             return imageTags;
