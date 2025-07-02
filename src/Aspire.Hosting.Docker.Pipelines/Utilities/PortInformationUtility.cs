@@ -411,11 +411,30 @@ public static class PortInformationUtility
 
         // Calculate max widths for better formatting
         var maxServiceNameWidth = Math.Max(15, displayServiceUrls.Keys.Max(k => k.Length));
-        var maxUrlWidth = Math.Max(25, displayServiceUrls.Values.SelectMany(v => v).DefaultIfEmpty("").Max(u => u.Length));
-
-        // Limit column widths for readability
+        
+        // Calculate max URL width accounting for emoji and formatting
+        var maxUrlContentWidth = 0;
+        foreach (var (serviceName, urls) in displayServiceUrls)
+        {
+            if (urls.Count == 0)
+            {
+                // Account for "⚠️ (no exposed ports)" - emoji + text
+                maxUrlContentWidth = Math.Max(maxUrlContentWidth, "⚠️ (no exposed ports)".Length + 1); // +1 for emoji width
+            }
+            else
+            {
+                foreach (var url in urls)
+                {
+                    // Account for "✅ " prefix on first URL and "   " prefix on subsequent URLs
+                    var formattedLength = url.Length + 3; // 3 spaces for "✅ " or "   " (emoji counts as ~2 chars visually)
+                    maxUrlContentWidth = Math.Max(maxUrlContentWidth, formattedLength);
+                }
+            }
+        }
+        
+        // Limit service name column width for readability, ensure URL column accounts for emoji formatting
         var serviceColWidth = Math.Min(maxServiceNameWidth, 35);
-        var urlColWidth = Math.Min(maxUrlWidth, 65);
+        var urlColWidth = Math.Max(maxUrlContentWidth, 25);
 
         // Add table header
         lines.Add("\n📋 Service URLs:");
@@ -434,7 +453,9 @@ public static class PortInformationUtility
                 var serviceCol = serviceName.Length > serviceColWidth
                     ? serviceName[..(serviceColWidth - 3)] + "..."
                     : serviceName.PadRight(serviceColWidth);
-                var urlCol = "⚠️ (no exposed ports)".PadRight(urlColWidth);
+                
+                var warningText = "⚠️ (no exposed ports)";
+                var urlCol = warningText.PadRight(urlColWidth - 1); // -1 to account for emoji visual width
                 lines.Add($"│ {serviceCol} │ {urlCol} │");
             }
             else
@@ -450,13 +471,13 @@ public static class PortInformationUtility
                         : "".PadRight(serviceColWidth);
 
                     var url = urls[i];
-                    var displayUrl = url.Length > urlColWidth
-                        ? url[..(urlColWidth - 3)] + "..."
-                        : url;
 
                     // Format URL with appropriate icon/spacing
-                    var formattedUrl = i == 0 ? $"✅ {displayUrl}" : $"   {displayUrl}";
-                    formattedUrl = formattedUrl.PadRight(urlColWidth);
+                    var formattedUrl = i == 0 ? $"✅ {url}" : $"   {url}";
+                    
+                    // Account for emoji visual width when padding
+                    var paddingAdjustment = i == 0 ? -1 : 0; // -1 for emoji visual width
+                    formattedUrl = formattedUrl.PadRight(urlColWidth + paddingAdjustment);
 
                     lines.Add($"│ {serviceCol} │ {formattedUrl} │");
                 }

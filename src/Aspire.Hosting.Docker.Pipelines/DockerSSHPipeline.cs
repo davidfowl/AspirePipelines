@@ -1028,7 +1028,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
         // Step 4: Prompt user for environment values
         var envResult = await interactionService.PromptInputsAsync(
             "Environment Configuration",
-            "Please review and update the environment variables for deployment. Image variables have been automatically populated from the registry.",
+            "Please review and update the environment variables for deployment.\nImage variables have been automatically populated from the registry.\n",
             [.. envInputs],
             cancellationToken: cancellationToken
         );
