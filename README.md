@@ -6,6 +6,13 @@ https://github.com/user-attachments/assets/d7bab501-f043-4058-a188-ccd1e0096a05
 
 ## Usage
 
+### Development Machine Requirements
+
+- **.NET 8 SDK** - https://dotnet.microsoft.com/en-us/download
+- **Docker Desktop** or Docker CLI - https://www.docker.com/get-started/
+- **SSH client** (typically included with Windows 10/11, macOS, and Linux)
+- **Aspire 9.4 CLI (Nightly)**: Follow the installation guide at https://github.com/dotnet/aspire/blob/main/docs/using-latest-daily.md#install-the-daily-cli
+
 ### Install the Aspire CLI
 
 ```
@@ -128,13 +135,6 @@ The remote deployment host must have:
 - **SSH server configured and accessible**
 - **User account with Docker permissions** (user should be in the `docker` group)
 - **Network connectivity** for downloading Docker images (if not transferred locally)
-
-### Development Machine Requirements
-
-- **.NET 8 SDK**
-- **Docker Desktop** or Docker CLI
-- **SSH client** (typically included with Windows 10/11, macOS, and Linux)
-- **Aspire 9.4 CLI (Nightly)**: Follow the installation guide at https://github.com/dotnet/aspire/blob/main/docs/using-latest-daily.md#install-the-daily-cli
 
 ## How It Works
 
