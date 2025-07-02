@@ -627,43 +627,12 @@ internal class DockerSSHPipeline : IAsyncDisposable
 
         await startTask.SucceedAsync($"New containers started\nCommand: cd {deployPath} && (docker compose up -d || docker-compose up -d)\nOutput: {startResult.Output.Trim()}", cancellationToken: cancellationToken);
 
-        await using var healthTask = await step.CreateTaskAsync("Waiting for services to be ready", cancellationToken);
+        // Use the new HealthCheckUtility to check each service individually
+        await HealthCheckUtility.CheckServiceHealth(deployPath, _sshClient!, step, cancellationToken);
 
-        await healthTask.UpdateAsync("Waiting for services to become ready...", cancellationToken);
-
-        // Wait for services to be ready with timeout
-        var healthyServices = 0;
-        var maxWaitTime = TimeSpan.FromMinutes(5);
-        var checkInterval = TimeSpan.FromSeconds(10);
-        var startTime = DateTime.UtcNow;
-
-        while (DateTime.UtcNow - startTime < maxWaitTime)
-        {
-            await Task.Delay(checkInterval, cancellationToken);
-
-            await healthTask.UpdateAsync($"Checking service health... ({(DateTime.UtcNow - startTime).TotalSeconds:F0}s elapsed)", cancellationToken);
-
-            var healthCheck = await ExecuteSSHCommandWithOutput(
-                $"cd {deployPath} && (docker compose ps --filter status=running || docker-compose ps --filter status=running || true)", cancellationToken);
-
-            if (healthCheck.ExitCode == 0)
-            {
-                var runningContainers = healthCheck.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries)
-                    .Where(line => line.Contains("Up") || line.Contains("running"))
-                    .Count();
-
-                if (runningContainers > 0)
-                {
-                    healthyServices = runningContainers;
-                    await healthTask.UpdateAsync("Gathering deployment information...", cancellationToken);
-                    break;
-                }
-            }
-        }
-
-        // Get final service status
-        var statusResult = await ExecuteSSHCommandWithOutput(
-            $"cd {deployPath} && (docker compose ps || docker-compose ps)", cancellationToken);
+        // Get final service status for summary
+        var finalServiceStatuses = await HealthCheckUtility.GetServiceStatuses(deployPath, _sshClient!, cancellationToken);
+        var healthyServices = finalServiceStatuses.Count(s => s.IsHealthy);
 
         // Try to extract port information
         var serviceUrls = await PortInformationUtility.ExtractPortInformation(deployPath, _sshClient!, cancellationToken);
@@ -671,9 +640,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
         // Format port information as a nice table
         var serviceTable = PortInformationUtility.FormatServiceUrlsAsTable(serviceUrls);
 
-        await healthTask.SucceedAsync($"Services are healthy and ready\nCommand: cd {deployPath} && (docker compose ps || docker-compose ps)\nFinal status:\n{statusResult.Output.Trim()}", cancellationToken: cancellationToken);
-
-        return $"Services running: {healthyServices} containers healthy.\n{serviceTable}";
+        return $"Services running: {healthyServices} of {finalServiceStatuses.Count} containers healthy.\n{serviceTable}";
     }
 
     private async Task TransferFile(string localPath, string remotePath, CancellationToken cancellationToken)
