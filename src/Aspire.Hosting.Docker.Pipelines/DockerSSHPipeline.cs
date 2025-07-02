@@ -1014,7 +1014,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
             envInputs.Add(new InteractionInput
             {
                 InputType = isSensitive ? InputType.SecretText : InputType.Text,
-                Label = $"Environment Variable: {key}",
+                Label = key,
                 Value = string.IsNullOrEmpty(value) ? null : value,
                 Required = string.IsNullOrEmpty(value) || !isImageVar
             });
@@ -1028,7 +1028,14 @@ internal class DockerSSHPipeline : IAsyncDisposable
         // Step 4: Prompt user for environment values
         var envResult = await interactionService.PromptInputsAsync(
             "Environment Configuration",
-            "Please review and update the environment variables for deployment.\nImage variables have been automatically populated from the registry.\n",
+            """
+            Please review and update the environment variables for deployment.
+            Image variables have been automatically populated from the registry.
+
+            Values from the remote server's .env file have been merged with your local .env file.
+            You can modify any values as needed.
+
+            """,
             [.. envInputs],
             cancellationToken: cancellationToken
         );
@@ -1103,7 +1110,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
             // Replace ~ with $HOME for shell expansion
             return path.Replace("~", "$HOME");
         }
-        
+
         return path;
     }
 
