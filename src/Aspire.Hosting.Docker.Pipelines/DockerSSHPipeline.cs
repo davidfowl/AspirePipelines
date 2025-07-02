@@ -380,7 +380,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
             SshPassword = sshDetails.SshPassword,
             SshKeyPath = sshKeyPath,
             SshPort = sshDetails.SshPort,
-            RemoteDeployPath = sshDetails.RemoteDeployPath
+            RemoteDeployPath = ExpandRemotePath(sshDetails.RemoteDeployPath)
         };
     }
 
@@ -1102,6 +1102,10 @@ internal class DockerSSHPipeline : IAsyncDisposable
                 await envFileTask.UpdateAsync("Writing environment file to temporary location...", cancellationToken);
                 await File.WriteAllTextAsync(tempFile, envContent, cancellationToken);
 
+                // Ensure the remote directory exists before transferring
+                await envFileTask.UpdateAsync($"Ensuring remote directory exists: {remoteDeployPath}", cancellationToken);
+                await ExecuteSSHCommand($"mkdir -p '{remoteDeployPath}'", cancellationToken);
+
                 await envFileTask.UpdateAsync($"Transferring environment file to remote path: {remoteEnvPath}", cancellationToken);
                 await TransferFile(tempFile, remoteEnvPath, cancellationToken);
 
@@ -1123,6 +1127,17 @@ internal class DockerSSHPipeline : IAsyncDisposable
             await finalizeStep.FailAsync($"Environment configuration failed: {ex.Message}");
             throw;
         }
+    }
+
+    private static string ExpandRemotePath(string path)
+    {
+        if (path.StartsWith("~"))
+        {
+            // Replace ~ with $HOME for shell expansion
+            return path.Replace("~", "$HOME");
+        }
+        
+        return path;
     }
 
     internal class SSHConnectionContext
