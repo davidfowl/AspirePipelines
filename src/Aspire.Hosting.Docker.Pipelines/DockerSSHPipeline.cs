@@ -949,7 +949,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
 
             await Task.WhenAll(tasks);
 
-            await step.SucceedAsync($"Container images pushed successfully. Tags: {string.Join(", ", imageTags.Select(kvp => $"{kvp.Key}:{kvp.Value}"))}");
+            await step.SucceedAsync("Container images pushed successfully.");
             return imageTags;
         }
         catch (Exception ex)
