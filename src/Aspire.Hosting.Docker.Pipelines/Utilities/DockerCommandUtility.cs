@@ -143,7 +143,7 @@ public static class DockerCommandUtility
         }
     }
 
-    public static async Task CheckDockerAvailability(PublishingStep step, CancellationToken cancellationToken)
+    public static async Task CheckDockerAvailability(IPublishingStep step, CancellationToken cancellationToken)
     {
         await using var task = await step.CreateTaskAsync("Checking Docker availability", cancellationToken);
 
@@ -184,7 +184,7 @@ public static class DockerCommandUtility
         }
     }
 
-    public static async Task CheckDockerCompose(PublishingStep step, CancellationToken cancellationToken)
+    public static async Task CheckDockerCompose(IPublishingStep step, CancellationToken cancellationToken)
     {
         await using var task = await step.CreateTaskAsync("Checking Docker Compose availability", cancellationToken);
 

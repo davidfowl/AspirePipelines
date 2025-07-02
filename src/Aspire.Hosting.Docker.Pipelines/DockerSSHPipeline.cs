@@ -384,7 +384,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
         };
     }
 
-    private async Task PrepareRemoteEnvironment(string deployPath, PublishingStep step, CancellationToken cancellationToken)
+    private async Task PrepareRemoteEnvironment(string deployPath, IPublishingStep step, CancellationToken cancellationToken)
     {
         await using var createDirTask = await step.CreateTaskAsync("Creating deployment directory", cancellationToken);
 
@@ -446,7 +446,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
         await permissionsTask.SucceedAsync($"Permissions and resources validated. Existing containers: {existingContainers}", cancellationToken: cancellationToken);
     }
 
-    private async Task TransferDeploymentFiles(string deployPath, DeployingContext context, PublishingStep step, CancellationToken cancellationToken)
+    private async Task TransferDeploymentFiles(string deployPath, DeployingContext context, IPublishingStep step, CancellationToken cancellationToken)
     {
         if (string.IsNullOrEmpty(context.OutputPath))
         {
@@ -566,7 +566,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
         }
     }
 
-    private async Task<string> DeployOnRemoteServer(string deployPath, Dictionary<string, string> imageTags, PublishingStep step, CancellationToken cancellationToken)
+    private async Task<string> DeployOnRemoteServer(string deployPath, Dictionary<string, string> imageTags, IPublishingStep step, CancellationToken cancellationToken)
     {
         await using var stopTask = await step.CreateTaskAsync("Stopping existing containers", cancellationToken);
 
@@ -743,7 +743,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
         }
     }
 
-    private async Task EstablishAndTestSSHConnection(string host, string username, string? password, string? keyPath, string port, PublishingStep step, CancellationToken cancellationToken)
+    private async Task EstablishAndTestSSHConnection(string host, string username, string? password, string? keyPath, string port, IPublishingStep step, CancellationToken cancellationToken)
     {
         Console.WriteLine("[DEBUG] Establishing SSH connection using SSH.NET");
 
