@@ -625,7 +625,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
             throw new InvalidOperationException($"Failed to start containers: {startResult.Error}\n\nContainer logs:\n{errorDetails}");
         }
 
-        await startTask.SucceedAsync($"New containers started\nCommand: cd {deployPath} && (docker compose up -d || docker-compose up -d)\nOutput: {startResult.Output.Trim()}", cancellationToken: cancellationToken);
+        await startTask.SucceedAsync("New containers started", cancellationToken: cancellationToken);
 
         // Use the new HealthCheckUtility to check each service individually
         await HealthCheckUtility.CheckServiceHealth(deployPath, _sshClient!, step, cancellationToken);
