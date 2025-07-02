@@ -330,7 +330,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
 
             var result = await interactionService.PromptInputsAsync(
                 $"SSH Configuration for {targetHost}",
-                $"Please provide the SSH configuration details for connecting to {targetHost}.",
+                $"Please provide the SSH configuration details for connecting to {targetHost}.\n",
                 inputs
             );
 
@@ -837,7 +837,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
 
         var registryResult = await interactionService.PromptInputsAsync(
             "Container Registry Configuration",
-            "Please provide the container registry details for pushing images.",
+            "Please provide the container registry details for pushing images.\n",
             registryInputs,
             cancellationToken: cancellationToken
         );
