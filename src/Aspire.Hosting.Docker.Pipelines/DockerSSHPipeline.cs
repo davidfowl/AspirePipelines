@@ -1017,7 +1017,13 @@ internal class DockerSSHPipeline : IAsyncDisposable
 
         foreach (var (key, value) in sortedEnvVars)
         {
-            var isImageVar = key.EndsWith("_IMAGE", StringComparison.OrdinalIgnoreCase);
+            if (key.EndsWith("_IMAGE", StringComparison.OrdinalIgnoreCase) || 
+                key.EndsWith("_PORT", StringComparison.OrdinalIgnoreCase))
+            {
+                // Skip the ability to modify image and port variables directly
+                continue;
+            }
+
             var isSensitive = EnvironmentFileUtility.IsSensitiveEnvironmentVariable(key);
 
             envInputs.Add(new InteractionInput
@@ -1025,7 +1031,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
                 InputType = isSensitive ? InputType.SecretText : InputType.Text,
                 Label = key,
                 Value = string.IsNullOrEmpty(value) ? null : value,
-                Required = string.IsNullOrEmpty(value) || !isImageVar
+                Required = string.IsNullOrEmpty(value)
             });
         }
 
