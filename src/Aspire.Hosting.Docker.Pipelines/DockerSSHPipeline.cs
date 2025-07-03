@@ -245,6 +245,19 @@ internal class DockerSSHPipeline : IAsyncDisposable
         // Local function to prompt for target host
         async Task<string> PromptForTargetHost(List<KeyValuePair<string, string>> hostOptions)
         {
+            // Check if there are any real host options (excluding the "CUSTOM" option)
+            var realHostOptions = hostOptions.Where(option => option.Key != "CUSTOM");
+            
+            // If no configured or known hosts available, skip choice prompt and go directly to custom host input
+            if (!realHostOptions.Any())
+            {
+                return await PromptForSingleText(
+                    "Target Host Configuration",
+                    "No configured or known hosts found. Please enter the target server host for deployment.",
+                    "Target Server Host"
+                );
+            }
+
             // First prompt: Target host selection
             var selectedHost = await PromptForChoice(
                 "Target Host Selection",
