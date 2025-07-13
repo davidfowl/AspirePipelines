@@ -19,12 +19,6 @@ https://github.com/user-attachments/assets/d7bab501-f043-4058-a188-ccd1e0096a05
 dotnet tool install --global aspire.cli --prerelease --source https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet9/nuget/v3/index.json
 ```
 
-### Enable the deployment command feature flag globally
-
-```
-aspire config set features.deployCommandEnabled true -g
-```
-
 ### Basic Usage
 
 Add SSH deployment support to your Aspire app host:
