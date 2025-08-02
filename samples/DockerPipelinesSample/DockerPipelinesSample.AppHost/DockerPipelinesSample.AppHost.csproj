@@ -17,9 +17,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Aspire.Hosting.AppHost" Version="9.4.0-preview.1.25351.30" />
-    <PackageReference Include="Aspire.Hosting.Docker" Version="9.4.0-preview.1.25351.30" />
-    <PackageReference Include="Aspire.Hosting.Redis" Version="9.4.0-preview.1.25351.30" />
+    <PackageReference Include="Aspire.Hosting.AppHost" Version="9.4.0" />
+    <PackageReference Include="Aspire.Hosting.Docker" Version="9.4.0-preview.1.25378.8" />
+    <PackageReference Include="Aspire.Hosting.Redis" Version="9.4.0" />
   </ItemGroup>
 
 </Project>

@@ -30,7 +30,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
         var sshContext = await PrepareSSHConnectionContext(context, configDefaults, interactionService);
 
         // Step 1: Verify deployment files exist
-        await using var verifyStep = await context.ProgressReporter.CreateStepAsync("Verify deployment files", context.CancellationToken);
+        await using var verifyStep = await context.ActivityReporter.CreateStepAsync("Verify deployment files", context.CancellationToken);
 
         try
         {
@@ -58,7 +58,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
         var imageTags = await PushContainerImagesToRegistry(context, interactionService, configDefaults, context.CancellationToken);
 
         // Step 3: Establish and test SSH connection
-        await using var sshTestStep = await context.ProgressReporter.CreateStepAsync("Establish and test SSH connection", context.CancellationToken);
+        await using var sshTestStep = await context.ActivityReporter.CreateStepAsync("Establish and test SSH connection", context.CancellationToken);
 
         try
         {
@@ -72,7 +72,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
         }
 
         // Step 4: Prepare remote environment
-        await using var prepareStep = await context.ProgressReporter.CreateStepAsync("Prepare remote environment", context.CancellationToken);
+        await using var prepareStep = await context.ActivityReporter.CreateStepAsync("Prepare remote environment", context.CancellationToken);
 
         try
         {
@@ -88,7 +88,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
         await MergeAndUpdateEnvironmentFile(sshContext.RemoteDeployPath, imageTags, context, interactionService, context.CancellationToken);
 
         // Step 5: Transfer files to target server
-        await using var transferStep = await context.ProgressReporter.CreateStepAsync("Transfer deployment files", context.CancellationToken);
+        await using var transferStep = await context.ActivityReporter.CreateStepAsync("Transfer deployment files", context.CancellationToken);
 
         try
         {
@@ -102,7 +102,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
         }
 
         // Step 6: Deploy on target server
-        await using var deployStep = await context.ProgressReporter.CreateStepAsync("Deploy application", context.CancellationToken);
+        await using var deployStep = await context.ActivityReporter.CreateStepAsync("Deploy application", context.CancellationToken);
 
         try
         {
@@ -123,7 +123,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
 
     private async Task CheckPrerequisitesConcurrently(DeployingContext context)
     {
-        await using var prerequisiteStep = await context.ProgressReporter.CreateStepAsync("Checking deployment prerequisites", context.CancellationToken);
+        await using var prerequisiteStep = await context.ActivityReporter.CreateStepAsync("Checking deployment prerequisites", context.CancellationToken);
 
         // Create all prerequisite check tasks
         var dockerTask = DockerCommandUtility.CheckDockerAvailability(prerequisiteStep, context.CancellationToken);
@@ -866,7 +866,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
         var registryPassword = registryResult.Data[3].Value;
 
         // Create the progress step for container image pushing
-        await using var step = await context.ProgressReporter.CreateStepAsync("Push container images to registry", cancellationToken);
+        await using var step = await context.ActivityReporter.CreateStepAsync("Push container images to registry", cancellationToken);
 
         try
         {
@@ -1074,7 +1074,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
         }
 
         // Step 5: Process user input and create final environment file
-        await using var finalizeStep = await context.ProgressReporter.CreateStepAsync("Finalizing environment configuration", cancellationToken);
+        await using var finalizeStep = await context.ActivityReporter.CreateStepAsync("Finalizing environment configuration", cancellationToken);
 
         await using var envFileTask = await finalizeStep.CreateTaskAsync("Creating and transferring environment file", cancellationToken);
 

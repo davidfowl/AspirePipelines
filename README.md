@@ -8,15 +8,15 @@ https://github.com/user-attachments/assets/d7bab501-f043-4058-a188-ccd1e0096a05
 
 ### Development Machine Requirements
 
-- **.NET 8 SDK** - https://dotnet.microsoft.com/en-us/download
+- **.NET 9 SDK** - https://dotnet.microsoft.com/en-us/download
 - **Docker Desktop** or Docker CLI - https://www.docker.com/get-started/
 - **SSH client** (typically included with Windows 10/11, macOS, and Linux)
-- **Aspire 9.4 CLI (Nightly)**: Follow the installation guide at https://github.com/dotnet/aspire/blob/main/docs/using-latest-daily.md#install-the-daily-cli
+- **Aspire CLI**: [Install Guide](https://learn.microsoft.com/en-us/dotnet/aspire/cli/install#install-as-a-native-executable)
 
-### Install the Aspire CLI
+#### Set the feature flag
 
-```
-dotnet tool install --global aspire.cli --prerelease --source https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet9/nuget/v3/index.json
+```bash
+aspire config set -g features.deployCommandEnabled true 
 ```
 
 ### Basic Usage
@@ -115,11 +115,8 @@ DOCKERSSH__REPOSITORYPREFIX=your-docker-username
 
 ### Prerequisites
 
-1. **.NET Aspire 9.4 CLI (Nightly Build)**: Required for deployment functionality
-   - Follow the installation guide: https://github.com/dotnet/aspire/blob/main/docs/using-latest-daily.md#install-the-daily-cli
-2. **.NET 8 SDK**: Required for building and running Aspire applications
-3. **Docker**: Must be installed on both local development machine and target deployment host
-4. **SSH Access**: SSH connectivity to the target deployment host
+1. **Docker**: Must be installed on both local development machine and target deployment host
+2. **SSH Access**: SSH connectivity to the target deployment host
 
 ### Target Host Requirements
 
