@@ -1029,7 +1029,7 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
             throw new InvalidOperationException($"SSH system info check failed: {infoResult.Error}");
         }
 
-        await verifyTask.SucceedAsync($"Remote system access verified\nCommand: {infoCommand}\nSystem info: {infoResult.Output.Trim()}", cancellationToken: cancellationToken);
+        await verifyTask.SucceedAsync($"Remote system access verified", cancellationToken: cancellationToken);
     }
 
     private async Task CleanupSSHConnection()
@@ -1085,11 +1085,6 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
         {
             // Generate timestamp-based tag
             var imageTag = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
-
-            if (string.IsNullOrEmpty(OutputPath))
-            {
-                throw new InvalidOperationException("Deployment output path not available");
-            }
 
             // Task 4: Tag images for registry (one task per tag operation)
             foreach (var cr in context.Model.GetComputeResources())
