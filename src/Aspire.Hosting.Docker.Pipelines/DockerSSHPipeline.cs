@@ -206,6 +206,22 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
             throw new InvalidOperationException("SSH context not available for establishing connection");
         }
         await EstablishAndTestSSHConnectionStepAsync(sshContext, context);
+
+        // Save the SSH context to deployment state for future runs
+        var deploymentStateManager = context.Services.GetRequiredService<IDeploymentStateManager>();
+        var state = await deploymentStateManager.LoadStateAsync(context.CancellationToken);
+        var sshSection = state.Prop(SshContextKey);
+
+        // Save SSH context to state for future use
+        sshSection[nameof(SSHConnectionContext.TargetHost)] = sshContext.TargetHost;
+        sshSection[nameof(SSHConnectionContext.SshUsername)] = sshContext.SshUsername;
+        sshSection[nameof(SSHConnectionContext.SshPassword)] = sshContext.SshPassword ?? "";
+        sshSection[nameof(SSHConnectionContext.SshKeyPath)] = sshContext.SshKeyPath ?? "";
+        sshSection[nameof(SSHConnectionContext.SshPort)] = sshContext.SshPort;
+        sshSection[nameof(SSHConnectionContext.RemoteDeployPath)] = sshContext.RemoteDeployPath;
+
+        await deploymentStateManager.SaveStateAsync(state, context.CancellationToken);
+
     }
 
     private async Task PrepareRemoteEnvironmentStep(DeployingContext context)
@@ -539,20 +555,6 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
             SshPort = sshDetails.SshPort,
             RemoteDeployPath = ExpandRemotePath(sshDetails.RemoteDeployPath)
         };
-
-        var deploymentStateManager = context.Services.GetRequiredService<IDeploymentStateManager>();
-        var state = await deploymentStateManager.LoadStateAsync(context.CancellationToken);
-        var sshSection = state.Prop(SshContextKey);
-
-        // Save SSH context to state for future use
-        sshSection[nameof(SSHConnectionContext.TargetHost)] = sshContext.TargetHost;
-        sshSection[nameof(SSHConnectionContext.SshUsername)] = sshContext.SshUsername;
-        sshSection[nameof(SSHConnectionContext.SshPassword)] = sshContext.SshPassword ?? "";
-        sshSection[nameof(SSHConnectionContext.SshKeyPath)] = sshContext.SshKeyPath ?? "";
-        sshSection[nameof(SSHConnectionContext.SshPort)] = sshContext.SshPort;
-        sshSection[nameof(SSHConnectionContext.RemoteDeployPath)] = sshContext.RemoteDeployPath;
-
-        await deploymentStateManager.SaveStateAsync(state, context.CancellationToken);
 
         return sshContext;
     }
