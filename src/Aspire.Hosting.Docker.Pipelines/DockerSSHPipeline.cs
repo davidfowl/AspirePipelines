@@ -23,10 +23,12 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
 
     // Deployment state keys
     private const string SshContextKey = "DockerSSH";
+    private const string RegistryContextKey = "DockerRegistry";
 
     // Local state storage since IDeploymentStateManager does not expose generic Set/TryGet APIs here
     private SSHConnectionContext? _sshContext;
     private Dictionary<string, string>? _imageTags;
+    private RegistryConfiguration? _registryConfig;
 
     public DockerComposeEnvironmentResource DockerComposeEnvironment { get; } = dockerComposeEnvironmentResource;
 
@@ -36,7 +38,8 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
 
     public IEnumerable<PipelineStep> CreateSteps()
     {
-        var prepareTempDir = new PipelineStep {
+        var prepareTempDir = new PipelineStep
+        {
             Name = "Prepare Temporary Directory",
             Action = async context =>
             {
@@ -50,16 +53,17 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
 
         // Step sequence mirroring the logical deployment flow
         var prepareSshContext = new PipelineStep { Name = "Prepare SSH Context", Action = PrepareSSHContextStep };
-        prepareSshContext.DependsOn(prereqs);
 
         var emitDeploymentFiles = new PipelineStep { Name = "Emit Deployment Files", Action = EmitDockerComposeFileStep };
-        emitDeploymentFiles.DependsOn(prepareSshContext);
+
+        var configureRegistry = new PipelineStep { Name = "Configure Container Registry", Action = ConfigureRegistryStep };
 
         var pushImages = new PipelineStep { Name = "Push Container Images", Action = PushImagesStep };
+        pushImages.DependsOn(configureRegistry);
         pushImages.DependsOn(emitDeploymentFiles);
 
         var establishSsh = new PipelineStep { Name = "Establish SSH Connection", Action = EstablishSSHConnectionStep }; // tests connectivity
-        establishSsh.DependsOn(pushImages);
+        establishSsh.DependsOn(prepareSshContext);
 
         var prepareRemote = new PipelineStep { Name = "Prepare Remote Environment", Action = PrepareRemoteEnvironmentStep };
         prepareRemote.DependsOn(establishSsh);
@@ -73,7 +77,7 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
         var deploy = new PipelineStep { Name = "Deploy Application", Action = DeployApplicationStep };
         deploy.DependsOn(transferFiles);
 
-        return [prepareTempDir, prereqs, prepareSshContext, emitDeploymentFiles, pushImages, establishSsh, prepareRemote, mergeEnv, transferFiles, deploy];
+        return [prepareTempDir, prereqs, prepareSshContext, emitDeploymentFiles, configureRegistry, pushImages, establishSsh, prepareRemote, mergeEnv, transferFiles, deploy];
     }
 
 
@@ -189,13 +193,104 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
         await VerifyDeploymentFilesAsync(context);
     }
 
+    private async Task ConfigureRegistryStep(DeployingContext context)
+    {
+        var configuration = context.Services.GetRequiredService<IConfiguration>();
+        var interactionService = context.Services.GetRequiredService<IInteractionService>();
+
+        await using var step = await context.ActivityReporter.CreateStepAsync("Configure registry", context.CancellationToken);
+
+        var section = configuration.GetSection(RegistryContextKey);
+
+        string registryUrl = section["RegistryUrl"] ?? "";
+        string? repositoryPrefix = section["RepositoryPrefix"];
+        string? registryUsername = section["RegistryUsername"];
+        string? registryPassword = section["RegistryPassword"];
+
+        if (!string.IsNullOrWhiteSpace(registryUrl) && !string.IsNullOrWhiteSpace(repositoryPrefix))
+        {
+            _registryConfig = new RegistryConfiguration(registryUrl, repositoryPrefix, registryUsername, registryPassword);
+            return;
+        }
+        else
+        {
+            var configDefaults = ConfigurationUtility.GetConfigurationDefaults(configuration);
+
+            var inputs = new InteractionInput[]
+            {
+            new() { Name = "registryUrl", Required = true, InputType = InputType.Text, Label = "Container Registry URL", Value = "docker.io" },
+            new() { Name = "repositoryPrefix", InputType = InputType.Text, Label = "Image Repository Prefix", Value = configDefaults.RepositoryPrefix },
+            new() { Name = "registryUsername", InputType = InputType.Text, Label = "Registry Username", Value = configDefaults.RegistryUsername },
+            new() { Name = "registryPassword", InputType = InputType.SecretText, Label = "Registry Password/Token" }
+            };
+
+            await using var promptTask = await step.CreateTaskAsync("Collecting registry settings", context.CancellationToken);
+            var result = await interactionService.PromptInputsAsync(
+                "Container Registry Configuration",
+                "Provide container registry details (leave credentials blank for anonymous access).\n",
+                inputs,
+                cancellationToken: context.CancellationToken);
+
+            if (result.Canceled)
+            {
+                await promptTask.FailAsync("Canceled", context.CancellationToken);
+                throw new InvalidOperationException("Registry configuration was canceled");
+            }
+
+            registryUrl = result.Data["registryUrl"].Value ?? throw new InvalidOperationException("Registry URL is required");
+            repositoryPrefix = result.Data["repositoryPrefix"].Value?.Trim();
+            registryUsername = result.Data["registryUsername"].Value;
+            registryPassword = result.Data["registryPassword"].Value;
+            await promptTask.SucceedAsync("Collected", context.CancellationToken);
+        }
+
+        if (!string.IsNullOrEmpty(registryUsername) && !string.IsNullOrEmpty(registryPassword))
+        {
+            await using var loginTask = await step.CreateTaskAsync("Authenticating", context.CancellationToken);
+            var loginResult = await DockerCommandUtility.ExecuteDockerLogin(registryUrl, registryUsername, registryPassword, context.CancellationToken);
+            if (loginResult.ExitCode != 0)
+            {
+                await loginTask.FailAsync($"Docker login failed: {loginResult.Error}", context.CancellationToken);
+                throw new InvalidOperationException($"Docker login failed: {loginResult.Error}");
+            }
+            await loginTask.SucceedAsync($"Authenticated with {registryUrl}", context.CancellationToken);
+        }
+        else
+        {
+            await using var skipLogin = await step.CreateTaskAsync("Skipping authentication", context.CancellationToken);
+            await skipLogin.SucceedAsync("No credentials provided", cancellationToken: context.CancellationToken);
+        }
+
+        _registryConfig = new RegistryConfiguration(registryUrl, repositoryPrefix, registryUsername, registryPassword);
+
+        // Persist
+        try
+        {
+            var deploymentStateManager = context.Services.GetRequiredService<IDeploymentStateManager>();
+            var state = await deploymentStateManager.LoadStateAsync(context.CancellationToken);
+            var registryStateSection = state.Prop(RegistryContextKey);
+            registryStateSection["RegistryUrl"] = registryUrl;
+            registryStateSection["RepositoryPrefix"] = repositoryPrefix ?? string.Empty;
+            registryStateSection["RegistryUsername"] = registryUsername ?? string.Empty;
+            registryStateSection["RegistryPassword"] = registryPassword ?? string.Empty;
+
+            await deploymentStateManager.SaveStateAsync(state, context.CancellationToken);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DEBUG] Failed to persist registry configuration: {ex.Message}");
+        }
+
+        await step.SucceedAsync("Registry configured");
+    }
+
     private async Task PushImagesStep(DeployingContext context)
     {
-        var interactionService = context.Services.GetRequiredService<IInteractionService>();
-        var configuration = context.Services.GetRequiredService<IConfiguration>();
-        var configDefaults = ConfigurationUtility.GetConfigurationDefaults(configuration);
-
-        _imageTags = await PushContainerImagesToRegistry(context, interactionService, configDefaults, context.CancellationToken);
+        if (_registryConfig is null)
+        {
+            throw new InvalidOperationException("Registry not configured before pushing images");
+        }
+        _imageTags = await PushContainerImagesToRegistry(context, _registryConfig, context.CancellationToken);
     }
 
     private async Task EstablishSSHConnectionStep(DeployingContext context)
@@ -977,89 +1072,17 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
         GC.SuppressFinalize(this);
     }
 
-    private async Task<Dictionary<string, string>> PushContainerImagesToRegistry(DeployingContext context, IInteractionService interactionService, DockerSSHConfiguration configDefaults, CancellationToken cancellationToken)
+    private async Task<Dictionary<string, string>> PushContainerImagesToRegistry(DeployingContext context, RegistryConfiguration registryConfig, CancellationToken cancellationToken)
     {
         var imageTags = new Dictionary<string, string>();
-
-        var registryInputs = new InteractionInput[]
-        {
-            new() {
-                Name = "registryUrl",
-                Required = true,
-                InputType = InputType.Text,
-                Label = "Container Registry URL",
-                Value = !string.IsNullOrEmpty(configDefaults.RegistryUrl) ? configDefaults.RegistryUrl : "docker.io"
-            },
-            new() {
-                Name = "repositoryPrefix",
-                InputType = InputType.Text,
-                Label = "Image Repository Prefix",
-                Value = configDefaults.RepositoryPrefix
-            },
-            new() {
-                Name = "registryUsername",
-                InputType = InputType.Text,
-                Label = "Registry Username",
-                Value = configDefaults.RegistryUsername
-            },
-            new() {
-                Name = "registryPassword",
-                InputType = InputType.SecretText,
-                Label = "Registry Password/Token",
-            }
-        };
-
-        var registryResult = await interactionService.PromptInputsAsync(
-            "Container Registry Configuration",
-            "Please provide the container registry details for pushing images.\n",
-            registryInputs,
-            cancellationToken: cancellationToken
-        );
-
-        if (registryResult.Canceled)
-        {
-            throw new InvalidOperationException("Registry configuration was canceled");
-        }
-
-        var registryUrl = registryResult.Data["registryUrl"].Value ?? throw new InvalidOperationException("Registry URL is required");
-        var repositoryPrefix = registryResult.Data["repositoryPrefix"].Value?.Trim();
-        var registryUsername = registryResult.Data["registryUsername"].Value;
-        var registryPassword = registryResult.Data["registryPassword"].Value;
+        var registryUrl = registryConfig.RegistryUrl;
+        var repositoryPrefix = registryConfig.RepositoryPrefix;
 
         // Create the progress step for container image pushing
         await using var step = await context.ActivityReporter.CreateStepAsync("Push container images to registry", cancellationToken);
 
         try
         {
-            // Task 2: Docker login (only if credentials are provided)
-            if (!string.IsNullOrEmpty(registryUsername) && !string.IsNullOrEmpty(registryPassword))
-            {
-                await using var loginTask = await step.CreateTaskAsync("Authenticating with container registry", cancellationToken);
-
-                try
-                {
-                    var loginResult = await DockerCommandUtility.ExecuteDockerLogin(registryUrl, registryUsername, registryPassword, cancellationToken);
-
-                    if (loginResult.ExitCode != 0)
-                    {
-                        await loginTask.FailAsync($"Docker login failed: {loginResult.Error}\nOutput: {loginResult.Output}", cancellationToken);
-                        throw new InvalidOperationException($"Docker login failed: {loginResult.Error}");
-                    }
-
-                    await loginTask.SucceedAsync($"Successfully authenticated with {registryUrl}", cancellationToken: cancellationToken);
-                }
-                catch (Exception ex) when (ex is not InvalidOperationException)
-                {
-                    await loginTask.FailAsync($"Docker login failed: {ex.Message}", cancellationToken);
-                    throw new InvalidOperationException($"Docker login failed: {ex.Message}", ex);
-                }
-            }
-            else
-            {
-                await using var skipLoginTask = await step.CreateTaskAsync("Skipping registry authentication", cancellationToken);
-                await skipLoginTask.SucceedAsync("No credentials provided - using existing Docker authentication or public registry", cancellationToken: cancellationToken);
-            }
-
             // Generate timestamp-based tag
             var imageTag = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
 
@@ -1308,4 +1331,6 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
         public required string SshPort { get; set; }
         public required string RemoteDeployPath { get; set; }
     }
+
+    internal sealed record RegistryConfiguration(string RegistryUrl, string? RepositoryPrefix, string? RegistryUsername, string? RegistryPassword);
 }
