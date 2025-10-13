@@ -1,3 +1,4 @@
+#pragma warning disable ASPIREPIPELINES001
 #pragma warning disable ASPIREINTERACTION001
 #pragma warning disable ASPIREPUBLISHERS001
 
@@ -9,19 +10,38 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Renci.SshNet;
 using Aspire.Hosting.Docker.Pipelines.Models;
+using Aspire.Hosting.Pipelines;
+using Microsoft.AspNetCore.Routing.Template;
 
 internal class DockerSSHPipeline : IAsyncDisposable
 {
     private SshClient? _sshClient = null;
     private ScpClient? _scpClient = null;
 
+    public IEnumerable<PipelineStep> CreateSteps()
+    {
+        var prereqs = new PipelineStep
+        {
+            Name = "Docker SSH Prerequisites Check",
+            Action = CheckPrerequisitesConcurrently
+        };
+
+        var deploy = new PipelineStep
+        {
+            Name = "Docker SSH Deployment",
+            Action = Deploy,
+        };
+
+        deploy.DependsOn(prereqs);
+
+        return [prereqs, deploy];
+    }
+
     public async Task Deploy(DeployingContext context)
     {
-        // Step 0: Prerequisites check
-        await CheckPrerequisitesConcurrently(context);
-
         var interactionService = context.Services.GetRequiredService<IInteractionService>();
         var configuration = context.Services.GetRequiredService<IConfiguration>();
+        var deploymentStateManager = context.Services.GetRequiredService<IDeploymentStateManager>();
 
         // Get configuration defaults once
         var configDefaults = ConfigurationUtility.GetConfigurationDefaults(configuration);
@@ -197,6 +217,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
             var inputs = new InteractionInput[]
             {
                 new() {
+                    Name = label,
                     InputType = InputType.Choice,
                     Label = label,
                     Options = options,
@@ -220,6 +241,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
             var inputs = new InteractionInput[]
             {
                 new() {
+                    Name = label,
                     Required = required,
                     InputType = InputType.Text,
                     Label = label
@@ -247,7 +269,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
         {
             // Check if there are any real host options (excluding the "CUSTOM" option)
             var realHostOptions = hostOptions.Where(option => option.Key != "CUSTOM");
-            
+
             // If no configured or known hosts available, skip choice prompt and go directly to custom host input
             if (!realHostOptions.Any())
             {
@@ -319,22 +341,26 @@ internal class DockerSSHPipeline : IAsyncDisposable
             var inputs = new InteractionInput[]
             {
                 new() {
+                    Name = "sshUsername",
                     Required = true,
                     InputType = InputType.Text,
                     Label = "SSH Username",
                     Value = configDefaults.SshUsername ?? "root"
                 },
                 new() {
+                    Name = "sshPassword",
                     InputType = InputType.SecretText,
                     Label = "SSH Password",
 
                 },
                 new() {
+                    Name = "sshPort",
                     InputType = InputType.Text,
                     Label = "SSH Port",
                     Value = !string.IsNullOrEmpty(configDefaults.SshPort) && configDefaults.SshPort != "22" ? configDefaults.SshPort : "22"
                 },
                 new() {
+                    Name = "remoteDeployPath",
                     InputType = InputType.Text,
                     Label = "Remote Deploy Path",
                     Value = !string.IsNullOrEmpty(configDefaults.RemoteDeployPath) ? configDefaults.RemoteDeployPath : sshConfig.DefaultDeployPath
@@ -827,22 +853,26 @@ internal class DockerSSHPipeline : IAsyncDisposable
         var registryInputs = new InteractionInput[]
         {
             new() {
+                Name = "registryUrl",
                 Required = true,
                 InputType = InputType.Text,
                 Label = "Container Registry URL",
                 Value = !string.IsNullOrEmpty(configDefaults.RegistryUrl) ? configDefaults.RegistryUrl : "docker.io"
             },
             new() {
+                Name = "repositoryPrefix",
                 InputType = InputType.Text,
                 Label = "Image Repository Prefix",
                 Value = configDefaults.RepositoryPrefix
             },
             new() {
+                Name = "registryUsername",
                 InputType = InputType.Text,
                 Label = "Registry Username",
                 Value = configDefaults.RegistryUsername
             },
             new() {
+                Name = "registryPassword",
                 InputType = InputType.SecretText,
                 Label = "Registry Password/Token",
             }
@@ -1035,6 +1065,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
 
             envInputs.Add(new InteractionInput
             {
+                Name = key,
                 InputType = isSensitive ? InputType.SecretText : InputType.Text,
                 Label = key,
                 Value = string.IsNullOrEmpty(value) ? null : value,
