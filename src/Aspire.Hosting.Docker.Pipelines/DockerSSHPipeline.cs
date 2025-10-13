@@ -591,8 +591,7 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
             return await PromptForSingleText(
                     "Target Host Configuration",
                     "No configured or known hosts found. Please enter the target server host for deployment.",
-                    "Target Server Host",
-                    secret: true
+                    "Target Server Host"
                 );
         }
 
