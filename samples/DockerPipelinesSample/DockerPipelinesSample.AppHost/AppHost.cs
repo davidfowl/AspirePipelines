@@ -4,10 +4,13 @@ builder.AddDockerComposeEnvironment("env")
     .WithDashboard(db => db.WithHostPort(8085))
     .WithSshDeploySupport();
 
+var p = builder.AddParameter("p");
+
 var cache = builder.AddRedis("cache");
 
 var apiService = builder.AddProject<Projects.DockerPipelinesSample_ApiService>("apiservice")
-    .WithHttpHealthCheck("/health");
+    .WithHttpHealthCheck("/health")
+    .WithEnvironment("P_ENV", p);
 
 builder.AddProject<Projects.DockerPipelinesSample_Web>("webfrontend")
     .WithExternalHttpEndpoints()
