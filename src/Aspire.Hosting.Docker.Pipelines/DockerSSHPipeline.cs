@@ -11,51 +11,61 @@ using Microsoft.Extensions.DependencyInjection;
 using Renci.SshNet;
 using Aspire.Hosting.Docker.Pipelines.Models;
 using Aspire.Hosting.Pipelines;
-using Microsoft.AspNetCore.Routing.Template;
 
 internal class DockerSSHPipeline : IAsyncDisposable
 {
     private SshClient? _sshClient = null;
     private ScpClient? _scpClient = null;
 
+    // Deployment state keys
+    private const string SshContextKey = "DockerSSH:SshContext";
+    private const string ImageTagsKey = "DockerSSH:ImageTags";
+
+    // Local state storage since IDeploymentStateManager does not expose generic Set/TryGet APIs here
+    private SSHConnectionContext? _sshContext;
+    private Dictionary<string, string>? _imageTags;
+
     public IEnumerable<PipelineStep> CreateSteps()
     {
-        var prereqs = new PipelineStep
-        {
-            Name = "Docker SSH Prerequisites Check",
-            Action = CheckPrerequisitesConcurrently
-        };
+        // Base prerequisite step
+        var prereqs = new PipelineStep { Name = "Docker SSH Prerequisites Check", Action = CheckPrerequisitesConcurrently };
 
-        var deploy = new PipelineStep
-        {
-            Name = "Docker SSH Deployment",
-            Action = Deploy,
-        };
+        // Step sequence mirroring the logical deployment flow
+        var prepareSshContext = new PipelineStep { Name = "Prepare SSH Context", Action = PrepareSSHContextStep };
+        prepareSshContext.DependsOn(prereqs);
 
-        deploy.DependsOn(prereqs);
+        var verifyDeploymentFiles = new PipelineStep { Name = "Verify Deployment Files", Action = VerifyDeploymentFilesStep };
+        verifyDeploymentFiles.DependsOn(prepareSshContext);
 
-        return [prereqs, deploy];
+        var pushImages = new PipelineStep { Name = "Push Container Images", Action = PushImagesStep };
+        pushImages.DependsOn(verifyDeploymentFiles);
+
+        var establishSsh = new PipelineStep { Name = "Establish SSH Connection", Action = EstablishSSHConnectionStep }; // tests connectivity
+        establishSsh.DependsOn(pushImages);
+
+        var prepareRemote = new PipelineStep { Name = "Prepare Remote Environment", Action = PrepareRemoteEnvironmentStep };
+        prepareRemote.DependsOn(establishSsh);
+
+        var mergeEnv = new PipelineStep { Name = "Merge Environment File", Action = MergeEnvironmentFileStep };
+        mergeEnv.DependsOn(prepareRemote);
+
+        var transferFiles = new PipelineStep { Name = "Transfer Deployment Files", Action = TransferDeploymentFilesPipelineStep };
+        transferFiles.DependsOn(mergeEnv);
+
+        var deploy = new PipelineStep { Name = "Deploy Application", Action = DeployApplicationStep };
+        deploy.DependsOn(transferFiles);
+
+        return [prereqs, prepareSshContext, verifyDeploymentFiles, pushImages, establishSsh, prepareRemote, mergeEnv, transferFiles, deploy];
     }
 
-    public async Task Deploy(DeployingContext context)
+
+    #region Deploy Step Helpers
+    private async Task VerifyDeploymentFilesAsync(DeployingContext context)
     {
-        var interactionService = context.Services.GetRequiredService<IInteractionService>();
-        var configuration = context.Services.GetRequiredService<IConfiguration>();
-        var deploymentStateManager = context.Services.GetRequiredService<IDeploymentStateManager>();
-
-        // Get configuration defaults once
-        var configDefaults = ConfigurationUtility.GetConfigurationDefaults(configuration);
-
-        // Step 1: Prepare SSH connection context (includes user prompting)
-        var sshContext = await PrepareSSHConnectionContext(context, configDefaults, interactionService);
-
-        // Step 1: Verify deployment files exist
         await using var verifyStep = await context.ActivityReporter.CreateStepAsync("Verify deployment files", context.CancellationToken);
-
         try
         {
             await using var verifyTask = await verifyStep.CreateTaskAsync("Checking for required files", context.CancellationToken);
-
             var envFileExists = await DeploymentFileUtility.VerifyDeploymentFiles(context);
             if (envFileExists)
             {
@@ -73,13 +83,11 @@ internal class DockerSSHPipeline : IAsyncDisposable
             await verifyStep.FailAsync($"Failed to verify deployment files: {ex.Message}");
             throw;
         }
+    }
 
-        // Step 2: Push container images to registry
-        var imageTags = await PushContainerImagesToRegistry(context, interactionService, configDefaults, context.CancellationToken);
-
-        // Step 3: Establish and test SSH connection
+    private async Task EstablishAndTestSSHConnectionStepAsync(SSHConnectionContext sshContext, DeployingContext context)
+    {
         await using var sshTestStep = await context.ActivityReporter.CreateStepAsync("Establish and test SSH connection", context.CancellationToken);
-
         try
         {
             await EstablishAndTestSSHConnection(sshContext.TargetHost, sshContext.SshUsername, sshContext.SshPassword, sshContext.SshKeyPath, sshContext.SshPort, sshTestStep, context.CancellationToken);
@@ -90,10 +98,11 @@ internal class DockerSSHPipeline : IAsyncDisposable
             await sshTestStep.FailAsync($"SSH connection failed: {ex.Message}");
             throw;
         }
+    }
 
-        // Step 4: Prepare remote environment
+    private async Task PrepareRemoteEnvironmentStepAsync(SSHConnectionContext sshContext, DeployingContext context)
+    {
         await using var prepareStep = await context.ActivityReporter.CreateStepAsync("Prepare remote environment", context.CancellationToken);
-
         try
         {
             await PrepareRemoteEnvironment(sshContext.RemoteDeployPath, prepareStep, context.CancellationToken);
@@ -104,12 +113,11 @@ internal class DockerSSHPipeline : IAsyncDisposable
             await prepareStep.FailAsync($"Failed to prepare remote environment: {ex.Message}");
             throw;
         }
+    }
 
-        await MergeAndUpdateEnvironmentFile(sshContext.RemoteDeployPath, imageTags, context, interactionService, context.CancellationToken);
-
-        // Step 5: Transfer files to target server
+    private async Task TransferDeploymentFilesStepAsync(SSHConnectionContext sshContext, DeployingContext context)
+    {
         await using var transferStep = await context.ActivityReporter.CreateStepAsync("Transfer deployment files", context.CancellationToken);
-
         try
         {
             await TransferDeploymentFiles(sshContext.RemoteDeployPath, context, transferStep, context.CancellationToken);
@@ -120,10 +128,11 @@ internal class DockerSSHPipeline : IAsyncDisposable
             await transferStep.FailAsync($"Failed to transfer files: {ex.Message}");
             throw;
         }
+    }
 
-        // Step 6: Deploy on target server
+    private async Task DeployOnRemoteServerStepAsync(SSHConnectionContext sshContext, Dictionary<string, string> imageTags, DeployingContext context)
+    {
         await using var deployStep = await context.ActivityReporter.CreateStepAsync("Deploy application", context.CancellationToken);
-
         try
         {
             var deploymentInfo = await DeployOnRemoteServer(sshContext.RemoteDeployPath, imageTags, deployStep, context.CancellationToken);
@@ -136,10 +145,96 @@ internal class DockerSSHPipeline : IAsyncDisposable
         }
         finally
         {
-            // Clean up SSH connection
             await CleanupSSHConnection();
         }
     }
+    #endregion
+
+    #region Pipeline Step Implementations
+    private async Task PrepareSSHContextStep(DeployingContext context)
+    {
+        var interactionService = context.Services.GetRequiredService<IInteractionService>();
+        var configuration = context.Services.GetRequiredService<IConfiguration>();
+        var configDefaults = ConfigurationUtility.GetConfigurationDefaults(configuration);
+
+        _sshContext = await PrepareSSHConnectionContext(context, configDefaults, interactionService);
+    }
+
+    private async Task VerifyDeploymentFilesStep(DeployingContext context)
+    {
+        await VerifyDeploymentFilesAsync(context);
+    }
+
+    private async Task PushImagesStep(DeployingContext context)
+    {
+        var interactionService = context.Services.GetRequiredService<IInteractionService>();
+        var configuration = context.Services.GetRequiredService<IConfiguration>();
+        var configDefaults = ConfigurationUtility.GetConfigurationDefaults(configuration);
+
+        _imageTags = await PushContainerImagesToRegistry(context, interactionService, configDefaults, context.CancellationToken);
+    }
+
+    private async Task EstablishSSHConnectionStep(DeployingContext context)
+    {
+        var sshContext = _sshContext;
+        if (sshContext is null)
+        {
+            throw new InvalidOperationException("SSH context not available for establishing connection");
+        }
+        await EstablishAndTestSSHConnectionStepAsync(sshContext, context);
+    }
+
+    private async Task PrepareRemoteEnvironmentStep(DeployingContext context)
+    {
+        var sshContext = _sshContext;
+        if (sshContext is null)
+        {
+            throw new InvalidOperationException("SSH context not available for preparing remote environment");
+        }
+        await PrepareRemoteEnvironmentStepAsync(sshContext, context);
+    }
+
+    private async Task MergeEnvironmentFileStep(DeployingContext context)
+    {
+        var sshContext = _sshContext;
+        if (sshContext is null)
+        {
+            throw new InvalidOperationException("SSH context not available for environment merge");
+        }
+        var imageTags = _imageTags;
+        if (imageTags is null)
+        {
+            throw new InvalidOperationException("Image tags not available for environment merge");
+        }
+        var interactionService = context.Services.GetRequiredService<IInteractionService>();
+        await MergeAndUpdateEnvironmentFile(sshContext.RemoteDeployPath, imageTags, context, interactionService, context.CancellationToken);
+    }
+
+    private async Task TransferDeploymentFilesPipelineStep(DeployingContext context)
+    {
+        var sshContext = _sshContext;
+        if (sshContext is null)
+        {
+            throw new InvalidOperationException("SSH context not available for file transfer");
+        }
+        await TransferDeploymentFilesStepAsync(sshContext, context);
+    }
+
+    private async Task DeployApplicationStep(DeployingContext context)
+    {
+        var sshContext = _sshContext;
+        if (sshContext is null)
+        {
+            throw new InvalidOperationException("SSH context not available for deployment");
+        }
+        var imageTags = _imageTags;
+        if (imageTags is null)
+        {
+            throw new InvalidOperationException("Image tags not available for deployment");
+        }
+        await DeployOnRemoteServerStepAsync(sshContext, imageTags, context);
+    }
+    #endregion
 
     private async Task CheckPrerequisitesConcurrently(DeployingContext context)
     {
