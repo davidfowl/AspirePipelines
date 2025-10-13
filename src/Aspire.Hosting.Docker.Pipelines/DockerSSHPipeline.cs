@@ -509,15 +509,6 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
                 hostOptions.Add(new KeyValuePair<string, string>(configDefaults.SshHost, $"{configDefaults.SshHost} (configured)"));
             }
 
-            // Add discovered known hosts (avoid duplicates)
-            foreach (var host in sshConfig.KnownHosts)
-            {
-                if (string.IsNullOrEmpty(configDefaults.SshHost) || host != configDefaults.SshHost)
-                {
-                    hostOptions.Add(new KeyValuePair<string, string>(host, host));
-                }
-            }
-
             return hostOptions;
         }
 
@@ -565,14 +556,14 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
         }
 
         // Local function for single text input prompts
-        async Task<string> PromptForSingleText(string title, string description, string label, bool required = true)
+        async Task<string> PromptForSingleText(string title, string description, string label, bool required = true, bool secret = false)
         {
             var inputs = new InteractionInput[]
             {
                 new() {
                     Name = label,
                     Required = required,
-                    InputType = InputType.Text,
+                    InputType = secret ? InputType.SecretText: InputType.Text,
                     Label = label
                 }
             };
@@ -596,30 +587,13 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
         // Local function to prompt for target host
         async Task<string> PromptForTargetHost(List<KeyValuePair<string, string>> hostOptions)
         {
-            // If no configured or known hosts available, skip choice prompt and go directly to custom host input
-            if (!hostOptions.Any())
-            {
-                return await PromptForSingleText(
+            // First prompt: Host selection, it might be an IP address, so keep it secret
+            return await PromptForSingleText(
                     "Target Host Configuration",
                     "No configured or known hosts found. Please enter the target server host for deployment.",
-                    "Target Server Host"
+                    "Target Server Host",
+                    secret: true
                 );
-            }
-
-            // First prompt: Target host selection
-            var selectedHost = await PromptForChoice(
-                "Target Host Selection",
-                "Please select the target server for deployment.",
-                "Target Server Host",
-                hostOptions
-            );
-
-            if (string.IsNullOrEmpty(selectedHost))
-            {
-                throw new InvalidOperationException("Target server host is required");
-            }
-
-            return selectedHost;
         }
 
         // Local function to prompt for SSH key path
