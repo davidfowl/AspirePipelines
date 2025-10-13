@@ -32,6 +32,8 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
 
     private string? _outputPath;
 
+    private string? _dashboardServiceName;
+
     public string OutputPath => _outputPath ?? throw new InvalidOperationException("OutputPath is not set. Ensure the pipeline step to prepare the temporary directory has run.");
 
     public IEnumerable<PipelineStep> CreateSteps()
@@ -75,7 +77,15 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
         var deploy = new PipelineStep { Name = "Deploy Application", Action = DeployApplicationStep };
         deploy.DependsOn(transferFiles);
 
-        return [prepareTempDir, prereqs, prepareSshContext, emitDeploymentFiles, configureRegistry, pushImages, establishSsh, prepareRemote, mergeEnv, transferFiles, deploy];
+        // Post-deploy: Extract dashboard login token from logs
+        var extractDashboardToken = new PipelineStep { Name = "Extract Dashboard Login Token", Action = ExtractDashboardLoginTokenStep };
+        extractDashboardToken.DependsOn(deploy);
+
+        // Final cleanup step to close SSH/SCP connections
+        var cleanup = new PipelineStep { Name = "Cleanup SSH Connection", Action = CleanupSSHConnectionStep };
+        cleanup.DependsOn(extractDashboardToken);
+
+        return [prepareTempDir, prereqs, prepareSshContext, emitDeploymentFiles, configureRegistry, pushImages, establishSsh, prepareRemote, mergeEnv, transferFiles, deploy, extractDashboardToken, cleanup];
     }
 
 
@@ -163,10 +173,12 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
             await deployStep.FailAsync($"Failed to deploy on server: {ex.Message}");
             throw;
         }
-        finally
-        {
-            await CleanupSSHConnection();
-        }
+    }
+
+    private async Task CleanupSSHConnectionStep(DeployingContext context)
+    {
+        await using var cleanupStep = await context.ActivityReporter.CreateStepAsync("Cleanup SSH connection", context.CancellationToken);
+        await CleanupSSHConnection();
     }
     #endregion
 
@@ -368,6 +380,100 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
         await DeployOnRemoteServerStepAsync(sshContext, imageTags, context);
     }
     #endregion
+
+    private async Task ExtractDashboardLoginTokenStep(DeployingContext context)
+    {
+        var sshContext = _sshContext;
+        if (sshContext is null)
+        {
+            throw new InvalidOperationException("SSH context not available for dashboard token extraction");
+        }
+
+        await using var step = await context.ActivityReporter.CreateStepAsync("Extract dashboard login token", context.CancellationToken);
+
+        // We'll attempt to locate the dashboard service logs (service name convention: <composeName>-dashboard)
+        var serviceName = _dashboardServiceName ?? throw new InvalidOperationException("Dashboard service name not identified during deployment");
+
+        // Poll up to 10 seconds (e.g. 5 attempts @ 2s) since the token may appear shortly after container start
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        string? token = null;
+        // Simplified regex: we're already filtering to lines that contain the phrase, so just capture after ?t=
+        var urlPattern = @"\?t=(?<tok>[A-Za-z0-9\-_.:]+)";
+
+        int attempt = 0;
+        while (DateTime.UtcNow < deadline && token is null && !context.CancellationToken.IsCancellationRequested)
+        {
+            attempt++;
+            await using var attemptTask = await step.CreateTaskAsync($"Log scan attempt {attempt}", context.CancellationToken);
+
+            // Use docker logs directly (serviceName is the container name). Tail a limited number of recent lines.
+            var logCommand = $"docker logs --tail 50 {serviceName}";
+            var result = await ExecuteSSHCommandWithOutput(logCommand, context.CancellationToken);
+
+            if (result.ExitCode != 0 || string.IsNullOrWhiteSpace(result.Output))
+            {
+                await attemptTask.UpdateAsync("No logs yet or command failed; will retry", context.CancellationToken);
+            }
+            else
+            {
+                // Look at individual lines to find the phrase and extract token
+                var lines = result.Output.Split('\n');
+                foreach (var rawLine in lines)
+                {
+                    var line = rawLine.Trim();
+                    if (line.Length == 0) continue;
+                    if (line.IndexOf("Login to the dashboard at", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        // Attempt regex on this specific line
+                        var lineMatch = System.Text.RegularExpressions.Regex.Match(line, urlPattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                        if (lineMatch.Success && lineMatch.Groups["tok"].Success)
+                        {
+                            token = lineMatch.Groups["tok"].Value.Trim();
+                            break;
+                        }
+                        // Fallback: if line contains '?t=' extract substring after '?t='
+                        var idx = line.IndexOf("?t=", StringComparison.OrdinalIgnoreCase);
+                        if (token is null && idx >= 0)
+                        {
+                            var candidate = line[(idx + 3)..];
+                            // Trim trailing punctuation/spaces
+                            candidate = new string(candidate.TakeWhile(c => !char.IsWhiteSpace(c) && c != '\r').ToArray());
+                            if (candidate.Length > 0)
+                            {
+                                token = candidate;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (token is not null)
+                {
+                    await attemptTask.SucceedAsync("Token found", context.CancellationToken);
+                    break;
+                }
+                await attemptTask.UpdateAsync("Token not found in current log snapshot", context.CancellationToken);
+            }
+
+            if (token is null)
+            {
+                // Delay before next attempt
+                try { await Task.Delay(TimeSpan.FromSeconds(2), context.CancellationToken); } catch { break; }
+                await attemptTask.SucceedAsync("Retrying", context.CancellationToken);
+            }
+        }
+
+        if (token is null)
+        {
+            await step.WarnAsync("Dashboard login token not detected within 20s polling window.", context.CancellationToken);
+            return;
+        }
+
+        // Persist token to local output directory
+        var tokenFile = Path.Combine(OutputPath, "dashboard-login-token.txt");
+        await File.WriteAllTextAsync(tokenFile, token + Environment.NewLine, context.CancellationToken);
+        await step.SucceedAsync($"Dashboard login token written to {tokenFile}");
+    }
 
     private async Task CheckPrerequisitesConcurrently(DeployingContext context)
     {
@@ -899,6 +1005,8 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
 
         // Try to extract port information
         var serviceUrls = await PortInformationUtility.ExtractPortInformation(deployPath, _sshClient!, cancellationToken);
+
+        _dashboardServiceName = serviceUrls.FirstOrDefault(s => s.Key.Contains(DockerComposeEnvironment.Name + "-dashboard", StringComparison.OrdinalIgnoreCase)).Key;
 
         // Format port information as a nice table
         var serviceTable = PortInformationUtility.FormatServiceUrlsAsTable(serviceUrls);
