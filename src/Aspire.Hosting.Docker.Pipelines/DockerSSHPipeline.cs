@@ -30,10 +30,23 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
 
     public DockerComposeEnvironmentResource DockerComposeEnvironment { get; } = dockerComposeEnvironmentResource;
 
+    private string? _outputPath;
+
+    public string OutputPath => _outputPath ?? throw new InvalidOperationException("OutputPath is not set. Ensure the pipeline step to prepare the temporary directory has run.");
+
     public IEnumerable<PipelineStep> CreateSteps()
     {
+        var prepareTempDir = new PipelineStep {
+            Name = "Prepare Temporary Directory",
+            Action = async context =>
+            {
+                _outputPath = context.OutputPath ?? Directory.CreateTempSubdirectory("aspire-deploy").FullName;
+            }
+        };
+
         // Base prerequisite step
         var prereqs = new PipelineStep { Name = "Docker SSH Prerequisites Check", Action = CheckPrerequisitesConcurrently };
+        prereqs.DependsOn(prepareTempDir);
 
         // Step sequence mirroring the logical deployment flow
         var prepareSshContext = new PipelineStep { Name = "Prepare SSH Context", Action = PrepareSSHContextStep };
@@ -60,7 +73,7 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
         var deploy = new PipelineStep { Name = "Deploy Application", Action = DeployApplicationStep };
         deploy.DependsOn(transferFiles);
 
-        return [prereqs, prepareSshContext, emitDeploymentFiles, pushImages, establishSsh, prepareRemote, mergeEnv, transferFiles, deploy];
+        return [prepareTempDir, prereqs, prepareSshContext, emitDeploymentFiles, pushImages, establishSsh, prepareRemote, mergeEnv, transferFiles, deploy];
     }
 
 
@@ -71,7 +84,7 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
         try
         {
             await using var verifyTask = await verifyStep.CreateTaskAsync("Checking for required files", context.CancellationToken);
-            var envFileExists = await DeploymentFileUtility.VerifyDeploymentFiles(context);
+            var envFileExists = await DeploymentFileUtility.VerifyDeploymentFiles(OutputPath);
             if (envFileExists)
             {
                 await verifyTask.SucceedAsync("docker-compose.yml and .env found");
@@ -170,7 +183,7 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
         if (DockerComposeEnvironment.TryGetLastAnnotation<PublishingCallbackAnnotation>(out var annotation))
         {
             // Publish the docker compose file
-            await annotation.Callback(new PublishingContext(context.Model, context.ExecutionContext, context.Services, context.Logger, context.CancellationToken, context.OutputPath!));
+            await annotation.Callback(new PublishingContext(context.Model, context.ExecutionContext, context.Services, context.Logger, context.CancellationToken, OutputPath));
         }
 
         await VerifyDeploymentFilesAsync(context);
@@ -608,15 +621,10 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
 
     private async Task TransferDeploymentFiles(string deployPath, DeployingContext context, IPublishingStep step, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrEmpty(context.OutputPath))
-        {
-            throw new InvalidOperationException("Deployment output path not available");
-        }
-
         await using var scanTask = await step.CreateTaskAsync("Scanning files for transfer", cancellationToken);
 
         // Check for both .yml and .yaml extensions for docker-compose file
-        var dockerComposeFile = File.Exists(Path.Combine(context.OutputPath, "docker-compose.yml"))
+        var dockerComposeFile = File.Exists(Path.Combine(OutputPath, "docker-compose.yml"))
             ? "docker-compose.yml"
             : "docker-compose.yaml";
 
@@ -631,7 +639,7 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
 
         foreach (var (file, required) in filesToTransfer)
         {
-            var localPath = Path.Combine(context.OutputPath, file);
+            var localPath = Path.Combine(OutputPath, file);
             if (File.Exists(localPath))
             {
                 transferredFiles.Add(file);
@@ -653,7 +661,7 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
 
         foreach (var file in transferredFiles)
         {
-            var localPath = Path.Combine(context.OutputPath, file);
+            var localPath = Path.Combine(OutputPath, file);
             await copyTask.UpdateAsync($"Transferring {file}...", cancellationToken);
 
             var remotePath = $"{deployPath}/{file}";
@@ -678,7 +686,7 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
             }
 
             // Get local file size for comparison
-            var localPath = Path.Combine(context.OutputPath, file);
+            var localPath = Path.Combine(OutputPath, file);
             var localFileInfo = new FileInfo(localPath);
 
             // Extract remote file size from ls output (5th column in ls -la output)
@@ -1011,10 +1019,10 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
             throw new InvalidOperationException("Registry configuration was canceled");
         }
 
-        var registryUrl = registryResult.Data[0].Value ?? throw new InvalidOperationException("Registry URL is required");
-        var repositoryPrefix = registryResult.Data[1].Value?.Trim();
-        var registryUsername = registryResult.Data[2].Value;
-        var registryPassword = registryResult.Data[3].Value;
+        var registryUrl = registryResult.Data["registryUrl"].Value ?? throw new InvalidOperationException("Registry URL is required");
+        var repositoryPrefix = registryResult.Data["repositoryPrefix"].Value?.Trim();
+        var registryUsername = registryResult.Data["registryUsername"].Value;
+        var registryPassword = registryResult.Data["registryPassword"].Value;
 
         // Create the progress step for container image pushing
         await using var step = await context.ActivityReporter.CreateStepAsync("Push container images to registry", cancellationToken);
@@ -1053,7 +1061,7 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
             // Generate timestamp-based tag
             var imageTag = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
 
-            if (string.IsNullOrEmpty(context.OutputPath))
+            if (string.IsNullOrEmpty(OutputPath))
             {
                 throw new InvalidOperationException("Deployment output path not available");
             }
@@ -1097,7 +1105,7 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
 
                 if (pushResult.ExitCode != 0)
                 {
-                    await pushTask.FailAsync($"Failed to push image {targetImageName}: {pushResult.Error}\nOutput: {pushResult.Output}", cancellationToken);
+                    await pushTask.FailAsync($"Failed to push image {targetImageName}: {pushResult.Error}", cancellationToken);
                     throw new InvalidOperationException($"Failed to push image {targetImageName}: {pushResult.Error}");
                 }
 
@@ -1125,12 +1133,12 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
 
     private async Task MergeAndUpdateEnvironmentFile(string remoteDeployPath, Dictionary<string, string> imageTags, DeployingContext context, IInteractionService interactionService, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrEmpty(context.OutputPath))
+        if (string.IsNullOrEmpty(OutputPath))
         {
             return; // No local environment to work with
         }
 
-        var localEnvPath = Path.Combine(context.OutputPath, ".env");
+        var localEnvPath = Path.Combine(OutputPath, ".env");
         if (!File.Exists(localEnvPath))
         {
             return; // No local .env file to merge
