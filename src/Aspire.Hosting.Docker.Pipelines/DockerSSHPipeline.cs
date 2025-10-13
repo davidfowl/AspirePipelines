@@ -11,19 +11,24 @@ using Microsoft.Extensions.DependencyInjection;
 using Renci.SshNet;
 using Aspire.Hosting.Docker.Pipelines.Models;
 using Aspire.Hosting.Pipelines;
+using Aspire.Hosting.Docker;
+using System.Net.Mime;
+using Json.More;
+using k8s.Models;
 
-internal class DockerSSHPipeline : IAsyncDisposable
+internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeEnvironmentResource) : IAsyncDisposable
 {
     private SshClient? _sshClient = null;
     private ScpClient? _scpClient = null;
 
     // Deployment state keys
-    private const string SshContextKey = "DockerSSH:SshContext";
-    private const string ImageTagsKey = "DockerSSH:ImageTags";
+    private const string SshContextKey = "DockerSSH";
 
     // Local state storage since IDeploymentStateManager does not expose generic Set/TryGet APIs here
     private SSHConnectionContext? _sshContext;
     private Dictionary<string, string>? _imageTags;
+
+    public DockerComposeEnvironmentResource DockerComposeEnvironment { get; } = dockerComposeEnvironmentResource;
 
     public IEnumerable<PipelineStep> CreateSteps()
     {
@@ -34,11 +39,11 @@ internal class DockerSSHPipeline : IAsyncDisposable
         var prepareSshContext = new PipelineStep { Name = "Prepare SSH Context", Action = PrepareSSHContextStep };
         prepareSshContext.DependsOn(prereqs);
 
-        var verifyDeploymentFiles = new PipelineStep { Name = "Verify Deployment Files", Action = VerifyDeploymentFilesStep };
-        verifyDeploymentFiles.DependsOn(prepareSshContext);
+        var emitDeploymentFiles = new PipelineStep { Name = "Emit Deployment Files", Action = EmitDockerComposeFileStep };
+        emitDeploymentFiles.DependsOn(prepareSshContext);
 
         var pushImages = new PipelineStep { Name = "Push Container Images", Action = PushImagesStep };
-        pushImages.DependsOn(verifyDeploymentFiles);
+        pushImages.DependsOn(emitDeploymentFiles);
 
         var establishSsh = new PipelineStep { Name = "Establish SSH Connection", Action = EstablishSSHConnectionStep }; // tests connectivity
         establishSsh.DependsOn(pushImages);
@@ -55,7 +60,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
         var deploy = new PipelineStep { Name = "Deploy Application", Action = DeployApplicationStep };
         deploy.DependsOn(transferFiles);
 
-        return [prereqs, prepareSshContext, verifyDeploymentFiles, pushImages, establishSsh, prepareRemote, mergeEnv, transferFiles, deploy];
+        return [prereqs, prepareSshContext, emitDeploymentFiles, pushImages, establishSsh, prepareRemote, mergeEnv, transferFiles, deploy];
     }
 
 
@@ -160,8 +165,14 @@ internal class DockerSSHPipeline : IAsyncDisposable
         _sshContext = await PrepareSSHConnectionContext(context, configDefaults, interactionService);
     }
 
-    private async Task VerifyDeploymentFilesStep(DeployingContext context)
+    private async Task EmitDockerComposeFileStep(DeployingContext context)
     {
+        if (DockerComposeEnvironment.TryGetLastAnnotation<PublishingCallbackAnnotation>(out var annotation))
+        {
+            // Publish the docker compose file
+            await annotation.Callback(new PublishingContext(context.Model, context.ExecutionContext, context.Services, context.Logger, context.CancellationToken, context.OutputPath!));
+        }
+
         await VerifyDeploymentFilesAsync(context);
     }
 
@@ -279,9 +290,6 @@ internal class DockerSSHPipeline : IAsyncDisposable
                 }
             }
 
-            // Add custom host option
-            hostOptions.Add(new KeyValuePair<string, string>("CUSTOM", "Enter custom host..."));
-
             return hostOptions;
         }
 
@@ -300,9 +308,6 @@ internal class DockerSSHPipeline : IAsyncDisposable
             // Add password authentication option
             sshKeyOptions.Add(new KeyValuePair<string, string>("", "Password Authentication (no key)"));
 
-            // Add custom key option
-            sshKeyOptions.Add(new KeyValuePair<string, string>("CUSTOM", "Enter custom key path..."));
-
             return sshKeyOptions;
         }
 
@@ -314,9 +319,10 @@ internal class DockerSSHPipeline : IAsyncDisposable
                 new() {
                     Name = label,
                     InputType = InputType.Choice,
+                    AllowCustomChoice = true,
                     Label = label,
                     Options = options,
-                    Value = defaultValue ?? options.FirstOrDefault().Key
+                    Value = defaultValue
                 }
             };
 
@@ -362,11 +368,8 @@ internal class DockerSSHPipeline : IAsyncDisposable
         // Local function to prompt for target host
         async Task<string> PromptForTargetHost(List<KeyValuePair<string, string>> hostOptions)
         {
-            // Check if there are any real host options (excluding the "CUSTOM" option)
-            var realHostOptions = hostOptions.Where(option => option.Key != "CUSTOM");
-
             // If no configured or known hosts available, skip choice prompt and go directly to custom host input
-            if (!realHostOptions.Any())
+            if (!hostOptions.Any())
             {
                 return await PromptForSingleText(
                     "Target Host Configuration",
@@ -382,16 +385,6 @@ internal class DockerSSHPipeline : IAsyncDisposable
                 "Target Server Host",
                 hostOptions
             );
-
-            // Second prompt: Custom host if needed
-            if (selectedHost == "CUSTOM")
-            {
-                return await PromptForSingleText(
-                    "Custom Host Configuration",
-                    "Please enter the custom host details.",
-                    "Custom Host"
-                );
-            }
 
             if (string.IsNullOrEmpty(selectedHost))
             {
@@ -414,16 +407,6 @@ internal class DockerSSHPipeline : IAsyncDisposable
                 sshKeyOptions,
                 defaultKeyPath
             );
-
-            // Second prompt: Custom key path if needed
-            if (selectedKeyPath == "CUSTOM")
-            {
-                return await PromptForSingleText(
-                    "Custom SSH Key Configuration",
-                    "Please enter the path to your SSH private key file.",
-                    "Custom SSH Key Path"
-                );
-            }
 
             // Return the selected key path (could be empty for password auth, or an actual path)
             return string.IsNullOrEmpty(selectedKeyPath) ? null : selectedKeyPath;
@@ -473,12 +456,38 @@ internal class DockerSSHPipeline : IAsyncDisposable
                 throw new InvalidOperationException("SSH configuration was canceled");
             }
 
-            var sshUsername = result.Data[0].Value ?? throw new InvalidOperationException("SSH username is required");
-            var sshPassword = string.IsNullOrEmpty(result.Data[1].Value) ? null : result.Data[1].Value;
-            var sshPort = result.Data[2].Value ?? "22";
-            var remoteDeployPath = result.Data[3].Value ?? $"/home/{sshUsername}/aspire-app";
+            var sshUsername = result.Data["sshUsername"].Value ?? throw new InvalidOperationException("SSH username is required");
+            var sshPassword = string.IsNullOrEmpty(result.Data["sshPassword"].Value) ? null : result.Data["sshPassword"].Value;
+            var sshPort = result.Data["sshPort"].Value ?? "22";
+            var remoteDeployPath = result.Data["remoteDeployPath"].Value ?? $"/home/{sshUsername}/aspire-app";
 
             return (sshUsername, sshPassword, sshPort, remoteDeployPath);
+        }
+
+        // Try to load the stated SSH context if available
+        var configuration = context.Services.GetRequiredService<IConfiguration>();
+        var section = configuration.GetSection(SshContextKey);
+
+        var targetHost = section[nameof(SSHConnectionContext.TargetHost)];
+        var sshUsername = section[nameof(SSHConnectionContext.SshUsername)];
+        var sshPort = section[nameof(SSHConnectionContext.SshPort)];
+        var sshPassword = section[nameof(SSHConnectionContext.SshPassword)];
+        var sshKeyPath = section[nameof(SSHConnectionContext.SshKeyPath)];
+        var remoteDeployPath = section[nameof(SSHConnectionContext.RemoteDeployPath)];
+
+        if (!string.IsNullOrEmpty(targetHost) &&
+            !string.IsNullOrEmpty(sshUsername) &&
+            !string.IsNullOrEmpty(sshPort))
+        {
+            return new SSHConnectionContext
+            {
+                TargetHost = targetHost,
+                SshUsername = sshUsername,
+                SshPassword = string.IsNullOrEmpty(sshPassword) ? null : sshPassword,
+                SshKeyPath = string.IsNullOrEmpty(sshKeyPath) ? null : sshKeyPath,
+                SshPort = string.IsNullOrEmpty(sshPort) ? "22" : sshPort,
+                RemoteDeployPath = string.IsNullOrEmpty(remoteDeployPath) ? $"/home/{sshUsername}/aspire-app" : remoteDeployPath
+            };
         }
 
         // Main method logic starts here
@@ -489,13 +498,13 @@ internal class DockerSSHPipeline : IAsyncDisposable
         var hostOptions = BuildHostOptions(configDefaults, sshConfig);
 
         // Get target host through progressive prompting
-        var targetHost = await PromptForTargetHost(hostOptions);
+        targetHost ??= await PromptForTargetHost(hostOptions);
 
         // Build SSH key options for selection
         var sshKeyOptions = BuildSshKeyOptions(sshConfig);
 
         // Get SSH key path through progressive prompting
-        var sshKeyPath = await PromptForSshKeyPath(sshKeyOptions, configDefaults, sshConfig);
+        sshKeyPath ??= await PromptForSshKeyPath(sshKeyOptions, configDefaults, sshConfig);
 
         // Get SSH configuration details
         var sshDetails = await PromptForSshDetails(targetHost, sshKeyPath, configDefaults, sshConfig);
@@ -507,7 +516,8 @@ internal class DockerSSHPipeline : IAsyncDisposable
         }
 
         // Return the final SSH connection context
-        return new SSHConnectionContext
+
+        var sshContext = new SSHConnectionContext
         {
             TargetHost = targetHost,
             SshUsername = sshDetails.SshUsername,
@@ -516,6 +526,22 @@ internal class DockerSSHPipeline : IAsyncDisposable
             SshPort = sshDetails.SshPort,
             RemoteDeployPath = ExpandRemotePath(sshDetails.RemoteDeployPath)
         };
+
+        var deploymentStateManager = context.Services.GetRequiredService<IDeploymentStateManager>();
+        var state = await deploymentStateManager.LoadStateAsync(context.CancellationToken);
+        var sshSection = state.Prop(SshContextKey);
+
+        // Save SSH context to state for future use
+        sshSection[nameof(SSHConnectionContext.TargetHost)] = sshContext.TargetHost;
+        sshSection[nameof(SSHConnectionContext.SshUsername)] = sshContext.SshUsername;
+        sshSection[nameof(SSHConnectionContext.SshPassword)] = sshContext.SshPassword ?? "";
+        sshSection[nameof(SSHConnectionContext.SshKeyPath)] = sshContext.SshKeyPath ?? "";
+        sshSection[nameof(SSHConnectionContext.SshPort)] = sshContext.SshPort;
+        sshSection[nameof(SSHConnectionContext.RemoteDeployPath)] = sshContext.RemoteDeployPath;
+
+        await deploymentStateManager.SaveStateAsync(state, context.CancellationToken);
+
+        return sshContext;
     }
 
     private async Task PrepareRemoteEnvironment(string deployPath, IPublishingStep step, CancellationToken cancellationToken)
