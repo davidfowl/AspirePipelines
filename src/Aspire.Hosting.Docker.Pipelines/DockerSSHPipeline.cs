@@ -12,9 +12,7 @@ using Renci.SshNet;
 using Aspire.Hosting.Docker.Pipelines.Models;
 using Aspire.Hosting.Pipelines;
 using Aspire.Hosting.Docker;
-using System.Net.Mime;
-using Json.More;
-using k8s.Models;
+using System.Reflection;
 
 internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeEnvironmentResource) : IAsyncDisposable
 {
@@ -1167,85 +1165,31 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
         // Step 1: Read local environment file
         var localEnvVars = await EnvironmentFileUtility.ReadEnvironmentFile(localEnvPath);
 
-        // Step 2: Get remote environment file (if it exists)
-        var remoteEnvVars = new Dictionary<string, string>();
-        var remoteEnvPath = $"{remoteDeployPath}/.env";
-
-        try
-        {
-            var remoteEnvResult = await ExecuteSSHCommandWithOutput($"cat '{remoteEnvPath}' 2>/dev/null || echo 'FILE_NOT_FOUND'", cancellationToken);
-            if (remoteEnvResult.ExitCode == 0 && !remoteEnvResult.Output.Contains("FILE_NOT_FOUND"))
-            {
-                remoteEnvVars = EnvironmentFileUtility.ParseEnvironmentContent(remoteEnvResult.Output);
-            }
-        }
-        catch
-        {
-            // Remote env file doesn't exist or can't be read - continue with empty remote vars
-        }
-
-        // Step 3: Merge environment variables
-        var mergedEnvVars = new Dictionary<string, string>(remoteEnvVars, StringComparer.OrdinalIgnoreCase);
-
         // Update with image tags for each service
         foreach (var (serviceName, imageTag) in imageTags)
         {
             var imageEnvKey = $"{serviceName.ToUpperInvariant()}_IMAGE";
-            mergedEnvVars[imageEnvKey] = imageTag;
+            localEnvVars[imageEnvKey] = imageTag;
         }
 
-        // Add any new variables from local that don't exist in remote
-        foreach (var (key, value) in localEnvVars)
+        // HACK: We should make this public
+        var capturedEnvironmentVariables = typeof(DockerComposeEnvironmentResource).GetProperty("CapturedEnvironmentVariables", BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(DockerComposeEnvironment) as Dictionary<string, (string? Description, string? DefaultValue, object? Source)>
+        ?? [];
+        
+        // Any keys that map to a parameter should be set in the final env file
+        foreach (var (k, v) in capturedEnvironmentVariables)
         {
-            if (!mergedEnvVars.ContainsKey(key))
+            var (_, _, source) = v;
+
+            if (source is ParameterResource p)
             {
-                mergedEnvVars[key] = value;
+                localEnvVars[k] = await p.GetValueAsync(context.CancellationToken) ?? "";
             }
         }
 
-        // Step 4: Create input prompts for user to review/modify values
-        var envInputs = new List<InteractionInput>();
-        var sortedEnvVars = mergedEnvVars.OrderBy(kvp => kvp.Key).ToList();
-
-        foreach (var (key, value) in sortedEnvVars)
-        {
-            var isImageVar = key.EndsWith("_IMAGE", StringComparison.OrdinalIgnoreCase);
-            var isSensitive = EnvironmentFileUtility.IsSensitiveEnvironmentVariable(key);
-
-            envInputs.Add(new InteractionInput
-            {
-                Name = key,
-                InputType = isSensitive ? InputType.SecretText : InputType.Text,
-                Label = key,
-                Value = string.IsNullOrEmpty(value) ? null : value,
-                Required = string.IsNullOrEmpty(value) || !isImageVar
-            });
-        }
-
-        if (envInputs.Count == 0)
-        {
-            return; // Nothing to configure
-        }
-
-        // Step 4: Prompt user for environment values
-        var envResult = await interactionService.PromptInputsAsync(
-            "Environment Configuration",
-            """
-            Please review and update the environment variables for deployment.
-            Image variables have been automatically populated from the registry.
-
-            Values from the remote server's .env file have been merged with your local .env file.
-            You can modify any values as needed.
-
-            """,
-            [.. envInputs],
-            cancellationToken: cancellationToken
-        );
-
-        if (envResult.Canceled)
-        {
-            throw new InvalidOperationException("Environment configuration was canceled");
-        }
+        // // Step 4: Create input prompts for user to review/modify values
+        // var envInputs = new List<InteractionInput>();
+        var finalEnvVars = localEnvVars.OrderBy(kvp => kvp.Key).ToList();
 
         // Step 5: Process user input and create final environment file
         await using var finalizeStep = await context.ActivityReporter.CreateStepAsync("Finalizing environment configuration", cancellationToken);
@@ -1255,27 +1199,17 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
         try
         {
             // Step 5: Prepare final environment content and write to remote
-            var finalEnvVars = new Dictionary<string, string>();
-            for (int i = 0; i < sortedEnvVars.Count; i++)
-            {
-                var key = sortedEnvVars[i].Key;
-                var newValue = envResult.Data[i].Value ?? "";
-                if (!string.IsNullOrEmpty(newValue))
-                {
-                    finalEnvVars[key] = newValue;
-                }
-            }
-
             await envFileTask.UpdateAsync($"Processed {finalEnvVars.Count} environment variables", cancellationToken);
 
             // Create environment file content
             var envContent = string.Join("\n", finalEnvVars.Select(kvp => $"{kvp.Key}={kvp.Value}"));
 
             // Write to remote environment file
-            var tempFile = Path.GetTempFileName();
+            var tempFile = Path.Combine(OutputPath, "remote.env");
+            var remoteEnvPath = $"{remoteDeployPath}/.env";
             try
             {
-                await envFileTask.UpdateAsync("Writing environment file to temporary location...", cancellationToken);
+                await envFileTask.UpdateAsync($"Writing environment file to {tempFile}...", cancellationToken);
                 await File.WriteAllTextAsync(tempFile, envContent, cancellationToken);
 
                 // Ensure the remote directory exists before transferring
