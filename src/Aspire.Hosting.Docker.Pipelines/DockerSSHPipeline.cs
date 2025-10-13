@@ -1175,7 +1175,7 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
         // HACK: We should make this public
         var capturedEnvironmentVariables = typeof(DockerComposeEnvironmentResource).GetProperty("CapturedEnvironmentVariables", BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(DockerComposeEnvironment) as Dictionary<string, (string? Description, string? DefaultValue, object? Source)>
         ?? [];
-        
+
         // Any keys that map to a parameter should be set in the final env file
         foreach (var (k, v) in capturedEnvironmentVariables)
         {
@@ -1207,27 +1207,18 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
             // Write to remote environment file
             var tempFile = Path.Combine(OutputPath, "remote.env");
             var remoteEnvPath = $"{remoteDeployPath}/.env";
-            try
-            {
-                await envFileTask.UpdateAsync($"Writing environment file to {tempFile}...", cancellationToken);
-                await File.WriteAllTextAsync(tempFile, envContent, cancellationToken);
 
-                // Ensure the remote directory exists before transferring
-                await envFileTask.UpdateAsync($"Ensuring remote directory exists: {remoteDeployPath}", cancellationToken);
-                await ExecuteSSHCommand($"mkdir -p '{remoteDeployPath}'", cancellationToken);
+            await envFileTask.UpdateAsync($"Writing environment file to {tempFile}...", cancellationToken);
+            await File.WriteAllTextAsync(tempFile, envContent, cancellationToken);
 
-                await envFileTask.UpdateAsync($"Transferring environment file to remote path: {remoteEnvPath}", cancellationToken);
-                await TransferFile(tempFile, remoteEnvPath, cancellationToken);
+            // Ensure the remote directory exists before transferring
+            await envFileTask.UpdateAsync($"Ensuring remote directory exists: {remoteDeployPath}", cancellationToken);
+            await ExecuteSSHCommand($"mkdir -p '{remoteDeployPath}'", cancellationToken);
 
-                await envFileTask.SucceedAsync($"Environment file successfully transferred to {remoteEnvPath}", cancellationToken);
-            }
-            finally
-            {
-                if (File.Exists(tempFile))
-                {
-                    File.Delete(tempFile);
-                }
-            }
+            await envFileTask.UpdateAsync($"Transferring environment file to remote path: {remoteEnvPath}", cancellationToken);
+            await TransferFile(tempFile, remoteEnvPath, cancellationToken);
+
+            await envFileTask.SucceedAsync($"Environment file successfully transferred to {remoteEnvPath}", cancellationToken);
 
             await finalizeStep.SucceedAsync($"Environment configuration finalized with {finalEnvVars.Count} variables");
         }
