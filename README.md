@@ -150,9 +150,9 @@ The remote deployment host must have:
 This deployment pipeline is built using Aspire's step-based pipeline framework. Each step represents a discrete unit of work with clear dependencies on other steps. The pipeline execution engine automatically orders steps based on their dependencies and runs independent steps in parallel for optimal performance.
 
 **Building on Docker Compose's `prepare` step:**
-Docker Compose environments include a built-in `prepare-env` step that handles image building and generates docker-compose.yaml and .env files. This SSH deployment pipeline extends that foundation by adding steps to:
+Docker Compose environments include a built-in `prepare-env` step that handles image building and generates docker-compose.yaml and environment-specific .env files (e.g., `.env.Production`, `.env.Development`). This SSH deployment pipeline extends that foundation by adding steps to:
 1. Push the built images to a container registry
-2. Update the .env file with registry image references
+2. Update the environment-specific .env file with registry image references
 3. Transfer deployment files to a remote server via SSH
 4. Run `docker compose up` on the remote server to pull and deploy the images
 
@@ -177,7 +177,7 @@ When you run `aspire deploy`, the pipeline executes steps in the following order
 - `prepare-remote-env`: Verifies Docker on remote host and prepares deployment directory
 
 **Level 3** - Prepare deployment files:
-- `prepare-env`: Built-in Aspire step that builds images and generates `.env.Production` and `docker-compose.yaml` files
+- `prepare-env`: Built-in Aspire step that builds images and generates environment-specific `.env` files (e.g., `.env.Production`) and `docker-compose.yaml`
 
 **Level 4** - Push to registry:
 - `push-images-env`: Tags images with timestamps and pushes to container registry
