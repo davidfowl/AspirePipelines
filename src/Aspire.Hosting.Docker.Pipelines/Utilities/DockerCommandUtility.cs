@@ -156,7 +156,6 @@ public static class DockerCommandUtility
 
             if (versionResult.ExitCode != 0)
             {
-                await task.FailAsync("Docker is not installed or not in PATH", cancellationToken);
                 throw new InvalidOperationException("Docker is required for this deployment");
             }
 
@@ -173,13 +172,11 @@ public static class DockerCommandUtility
             }
             else
             {
-                await task.FailAsync("Docker daemon is not running or not accessible", cancellationToken);
                 throw new InvalidOperationException("Docker daemon must be running for this deployment");
             }
         }
         catch (Exception ex) when (ex is not InvalidOperationException)
         {
-            await task.FailAsync($"Docker check failed: {ex.Message}", cancellationToken);
             throw new InvalidOperationException("Docker is required for this deployment", ex);
         }
     }
@@ -210,14 +207,12 @@ public static class DockerCommandUtility
                 }
                 else
                 {
-                    await task.FailAsync("Docker Compose is not available (neither 'docker compose' nor 'docker-compose')", cancellationToken);
                     throw new InvalidOperationException("Docker Compose is required for this deployment");
                 }
             }
         }
         catch (Exception ex)
         {
-            await task.FailAsync($"Docker Compose check failed: {ex.Message}", cancellationToken);
             throw new InvalidOperationException("Docker Compose is required for this deployment", ex);
         }
     }
