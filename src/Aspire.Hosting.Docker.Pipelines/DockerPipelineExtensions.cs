@@ -33,7 +33,8 @@ public static class DockerPipelineExtensions
         // REVIEW: This needs to be disposed...
         var pipelineResource = new DockerSSHPipeline(resourceBuilder.Resource);
 #pragma warning disable ASPIREPIPELINES001 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
-        return resourceBuilder.WithPipelineStepFactory(pipelineResource.CreateSteps);
+        return resourceBuilder.WithPipelineStepFactory(pipelineResource.CreateSteps)
+        .WithPipelineConfiguration(pipelineResource.ConfigurePipelineAsync);
 #pragma warning restore ASPIREPIPELINES001 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
     }
 }

@@ -3,8 +3,6 @@
 #pragma warning disable ASPIREPIPELINES002
 
 using Aspire.Hosting;
-using Aspire.Hosting.ApplicationModel;
-using Aspire.Hosting.Publishing;
 using Aspire.Hosting.Docker.Pipelines.Utilities;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -13,7 +11,6 @@ using Renci.SshNet;
 using Aspire.Hosting.Docker.Pipelines.Models;
 using Aspire.Hosting.Pipelines;
 using Aspire.Hosting.Docker;
-using System.Reflection;
 
 internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeEnvironmentResource) : IAsyncDisposable
 {
@@ -44,40 +41,60 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
 #pragma warning restore ASPIREPIPELINES004 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
 
         // Base prerequisite step
-        var prereqs = new PipelineStep { Name = "Docker SSH Prerequisites Check", Action = CheckPrerequisitesConcurrently };
+        var prereqs = new PipelineStep { Name = $"ssh-prereq-{DockerComposeEnvironment.Name}", Action = CheckPrerequisitesConcurrently };
 
         // Step sequence mirroring the logical deployment flow
-        var prepareSshContext = new PipelineStep { Name = "Prepare SSH Context", Action = PrepareSSHContextStep };
+        var prepareSshContext = new PipelineStep { Name = $"prepare-ssh-context-{DockerComposeEnvironment.Name}", Action = PrepareSSHContextStep };
 
-        var configureRegistry = new PipelineStep { Name = "Configure Container Registry", Action = ConfigureRegistryStep };
+        var configureRegistry = new PipelineStep { Name = $"configure-registry-{DockerComposeEnvironment.Name}", Action = ConfigureRegistryStep };
 
-        var pushImages = new PipelineStep { Name = "Push Container Images", Action = PushImagesStep, DependsOnSteps = [$"prepare-{DockerComposeEnvironment.Name}"] };
+        var pushImages = new PipelineStep { Name = $"push-images-{DockerComposeEnvironment.Name}", Action = PushImagesStep, DependsOnSteps = [$"prepare-{DockerComposeEnvironment.Name}"] };
         pushImages.DependsOn(configureRegistry);
 
-        var establishSsh = new PipelineStep { Name = "Establish SSH Connection", Action = EstablishSSHConnectionStep }; // tests connectivity
+        var establishSsh = new PipelineStep { Name = $"establish-ssh-{DockerComposeEnvironment.Name}", Action = EstablishSSHConnectionStep }; // tests connectivity
         establishSsh.DependsOn(prepareSshContext);
 
-        var prepareRemote = new PipelineStep { Name = "Prepare Remote Environment", Action = PrepareRemoteEnvironmentStep };
+        var prepareRemote = new PipelineStep { Name = $"prepare-remote-{DockerComposeEnvironment.Name}", Action = PrepareRemoteEnvironmentStep };
         prepareRemote.DependsOn(establishSsh);
 
-        var mergeEnv = new PipelineStep { Name = "Merge Environment File", Action = MergeEnvironmentFileStep, DependsOnSteps = [$"prepare-{DockerComposeEnvironment.Name}"] };
+        var mergeEnv = new PipelineStep { Name = $"merge-environment-{DockerComposeEnvironment.Name}", Action = MergeEnvironmentFileStep, DependsOnSteps = [$"prepare-{DockerComposeEnvironment.Name}"] };
         mergeEnv.DependsOn(prepareRemote);
+        mergeEnv.DependsOn(pushImages);
 
-        var transferFiles = new PipelineStep { Name = "Transfer Deployment Files", Action = TransferDeploymentFilesPipelineStep };
+        var transferFiles = new PipelineStep { Name = $"transfer-files-{DockerComposeEnvironment.Name}", Action = TransferDeploymentFilesPipelineStep };
         transferFiles.DependsOn(mergeEnv);
 
-        var deploy = new PipelineStep { Name = "Deploy Application", Action = DeployApplicationStep };
+        var deploy = new PipelineStep { Name = $"docker-ssh-deploy-{DockerComposeEnvironment.Name}", Action = DeployApplicationStep };
         deploy.DependsOn(transferFiles);
 
         // Post-deploy: Extract dashboard login token from logs
-        var extractDashboardToken = new PipelineStep { Name = "Extract Dashboard Login Token", Action = ExtractDashboardLoginTokenStep };
+        var extractDashboardToken = new PipelineStep { Name = $"extract-dashboard-token-{DockerComposeEnvironment.Name}", Action = ExtractDashboardLoginTokenStep };
         extractDashboardToken.DependsOn(deploy);
 
         // Final cleanup step to close SSH/SCP connections
-        var cleanup = new PipelineStep { Name = "Cleanup SSH Connection", Action = CleanupSSHConnectionStep };
+        var cleanup = new PipelineStep { Name = $"cleanup-ssh-{DockerComposeEnvironment.Name}", Action = CleanupSSHConnectionStep };
         cleanup.DependsOn(extractDashboardToken);
 
-        return [prereqs, prepareSshContext, configureRegistry, pushImages, establishSsh, prepareRemote, mergeEnv, transferFiles, deploy, extractDashboardToken, cleanup];
+        var deploySshStep = new PipelineStep { Name = $"deploy-docker-ssh-{DockerComposeEnvironment.Name}", Action = context => Task.CompletedTask };
+        deploySshStep.DependsOn(cleanup);
+        deploySshStep.RequiredBy(WellKnownPipelineSteps.Deploy);
+
+        return [prereqs, prepareSshContext, configureRegistry, pushImages, establishSsh, prepareRemote, mergeEnv, transferFiles, deploy, extractDashboardToken, cleanup, deploySshStep];
+    }
+
+    public Task ConfigurePipelineAsync(PipelineConfigurationContext context)
+    {
+        var dockerComposeUpStep = context.Steps.FirstOrDefault(s => s.Name == $"docker-compose-up-{DockerComposeEnvironment.Name}");
+
+        var deployStep = context.Steps.FirstOrDefault(s => s.Name == WellKnownPipelineSteps.Deploy);
+
+        // Remove docker compose up from the deployment pipeline
+        // not needed for SSH deployment
+        deployStep?.DependsOnSteps.Remove($"docker-compose-up-{DockerComposeEnvironment.Name}");
+        dockerComposeUpStep?.RequiredBySteps.Remove(WellKnownPipelineSteps.Deploy);
+
+        // No additional configuration needed at this time
+        return Task.CompletedTask;
     }
 
 
