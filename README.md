@@ -17,7 +17,7 @@ This sample showcases how to build custom deployment pipelines for Aspire using 
 
 ### Development Machine Requirements
 
-- **.NET 9 SDK** - https://dotnet.microsoft.com/en-us/download
+- **.NET 10 SDK** - https://dotnet.microsoft.com/en-us/download
 - **Docker Desktop** or Docker CLI - https://www.docker.com/get-started/
 - **Aspire CLI**: [Install Guide](https://aspire.dev/docs/cli/install)
 
