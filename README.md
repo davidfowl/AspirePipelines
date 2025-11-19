@@ -1,8 +1,17 @@
 # Aspire Docker SSH Deployment Pipeline
 
-Deploy .NET Aspire applications to remote hosts via SSH with a single command. This sample demonstrates future deployment pipeline patterns for Aspire.
+Deploy Aspire applications to remote hosts via SSH with a single command. This project demonstrates a step-based deployment pipeline that integrates with Aspire's built-in pipeline system.
 
-https://github.com/user-attachments/assets/d7bab501-f043-4058-a188-ccd1e0096a05
+## Overview
+
+This sample showcases how to build custom deployment pipelines for Aspire using the pipeline framework. The pipeline builds on top of Docker Compose's built-in `prepare` step (which generates docker-compose.yaml and .env files) and adds additional steps to push images to a registry and deploy them to remote servers via SSH.
+
+**Key concepts demonstrated:**
+- **Step-based pipeline design**: Each deployment task is a discrete pipeline step
+- **Step dependencies**: Steps declare dependencies on other steps for proper ordering
+- **Built-in step integration**: Custom steps depend on Docker Compose's built-in `prepare-env` step to generate deployment files
+- **Interactive configuration**: Pipelines can prompt for missing configuration values
+- **Progress reporting**: Steps report progress using `IReportingStep`
 
 ## Usage
 
@@ -10,14 +19,7 @@ https://github.com/user-attachments/assets/d7bab501-f043-4058-a188-ccd1e0096a05
 
 - **.NET 9 SDK** - https://dotnet.microsoft.com/en-us/download
 - **Docker Desktop** or Docker CLI - https://www.docker.com/get-started/
-- **SSH client** (typically included with Windows 10/11, macOS, and Linux)
-- **Aspire CLI**: [Install Guide](https://learn.microsoft.com/en-us/dotnet/aspire/cli/install#install-as-a-native-executable)
-
-#### Set the feature flag
-
-```bash
-aspire config set -g features.deployCommandEnabled true 
-```
+- **Aspire CLI**: [Install Guide](https://aspire.dev/docs/cli/install)
 
 ### Basic Usage
 
@@ -53,10 +55,6 @@ Deploy your application using the Aspire CLI:
 # Deploy with interactive prompts
 aspire deploy
 ```
-
-## Overview
-
-Sample implementation showcasing configurable deployment pipelines that can be shared as NuGet packages, prompt for values, and integrate with IConfiguration.
 
 ## Features
 
@@ -114,6 +112,21 @@ DOCKERSSH__REGISTRYURL=docker.io
 DOCKERSSH__REPOSITORYPREFIX=your-docker-username
 ```
 
+### Deployment State
+
+Configuration values (SSH connection info, registry credentials) are stored in deployment state after the first deployment. This means you won't be prompted for these values on subsequent deployments.
+
+To clear stored configuration and be prompted again:
+
+```bash
+aspire deploy --clear-cache
+```
+
+This is useful when you need to:
+- Deploy to a different server
+- Use different registry credentials
+- Change deployment configuration settings
+
 ## Requirements
 
 ### Prerequisites
@@ -133,46 +146,93 @@ The remote deployment host must have:
 
 ## How It Works
 
-### Deployment Process
+### Step-Based Pipeline Architecture
 
-The deployment pipeline executes the following steps:
+This deployment pipeline is built using Aspire's step-based pipeline framework. Each step represents a discrete unit of work with clear dependencies on other steps. The pipeline execution engine automatically orders steps based on their dependencies and runs independent steps in parallel for optimal performance.
 
-1. **Configuration Resolution**: Reads deployment settings from configuration sources and prompts for missing values
-2. **Build & Prepare**: Builds Docker images for all containerized projects and generates deployment files (docker-compose.yaml, .env files)
-3. **Registry Push**: Tags images with timestamps and pushes them to the configured container registry
-4. **SSH Connection**: Establishes secure SSH connection to the target deployment host
-5. **Environment Preparation**: Verifies Docker installation and prepares deployment directory on remote host
-6. **File Transfer**: Transfers docker-compose.yaml and merged environment file to remote host
-7. **Container Deployment**: Pulls images from registry and starts containers using docker compose
-8. **Dashboard Access**: Extracts and displays Aspire dashboard login token from deployment logs
+**Building on Docker Compose's `prepare` step:**
+Docker Compose environments include a built-in `prepare-env` step that handles image building and generates docker-compose.yaml and .env files. This SSH deployment pipeline extends that foundation by adding steps to:
+1. Push the built images to a container registry
+2. Update the .env file with registry image references
+3. Transfer deployment files to a remote server via SSH
+4. Run `docker compose up` on the remote server to pull and deploy the images
 
-### Pipeline Architecture
+#### Pipeline Step Execution Flow
 
-The SSH deployment pipeline consists of multiple coordinated steps:
+When you run `aspire deploy`, the pipeline executes steps in the following order:
 
-**Setup Steps:**
-- `ssh-prereq-env`: Verifies Docker prerequisites
-- `prepare-ssh-context-env`: Prepares SSH connection context
-- `configure-registry-env`: Configures container registry credentials
+**Level 0** - Parallel execution of independent setup steps:
+- `ssh-prereq-env`: Verifies Docker prerequisites on local machine
+- `configure-registry-env`: Prompts for and configures container registry credentials
+- `deploy-prereq`: Initializes deployment state
+- `prepare-ssh-context-env`: Gathers SSH connection information
+- `publish-env`: Generates docker-compose.yaml structure
 
-**Build & Push Steps:**
-- `prepare-env`: Builds images and generates docker-compose files (built-in Aspire step)
-- `push-images-env`: Tags and pushes images to container registry
+**Level 1** - Parallel build and SSH connection:
+- `build-apiservice`, `build-webfrontend`: Build container images for each project
+- `establish-ssh-env`: Establishes SSH/SCP connection to target host
+- `publish`: Completes publish process
 
-**Remote Deployment Steps:**
-- `establish-ssh-env`: Establishes SSH connection to target host
-- `prepare-remote-env`: Verifies Docker installation on remote host
-- `merge-environment-env`: Merges environment files with registry image tags
-- `transfer-files-env`: Transfers docker-compose.yaml and .env to remote host
-- `docker-via-ssh-env`: Deploys containers on remote host
-- `extract-dashboard-token-env`: Extracts Aspire dashboard login token
-- `cleanup-ssh-env`: Closes SSH connections
+**Level 2** - Parallel preparation:
+- `build`: Aggregates individual build steps
+- `prepare-remote-env`: Verifies Docker on remote host and prepares deployment directory
 
-**Key Components:**
-- **`DockerSSHPipeline`**: Core pipeline implementation
-- **`WithSshDeploySupport`**: Extension method that registers the pipeline
-- **`IInteractionService`**: Handles interactive configuration prompts
-- **SSH.NET**: Secure SSH/SCP communication library
+**Level 3** - Prepare deployment files:
+- `prepare-env`: Built-in Aspire step that builds images and generates `.env.Production` and `docker-compose.yaml` files
+
+**Level 4** - Push to registry:
+- `push-images-env`: Tags images with timestamps and pushes to container registry
+
+**Level 5** - Merge configuration:
+- `merge-environment-env`: Updates environment file with registry image tags
+
+**Level 6** - Transfer files:
+- `transfer-files-env`: Transfers docker-compose.yaml and .env to remote host via SCP
+
+**Level 7** - Deploy:
+- `docker-via-ssh-env`: Runs `docker compose` on remote host to deploy containers
+
+**Level 8** - Extract token:
+- `extract-dashboard-token-env`: Retrieves Aspire dashboard login token from container logs
+
+**Level 9** - Cleanup:
+- `cleanup-ssh-env`: Closes SSH/SCP connections
+
+**Level 10-11** - Complete:
+- `deploy-docker-ssh-env`: Final coordination step
+- `deploy`: Overall deployment completion
+
+### Step Dependencies
+
+Steps declare dependencies using:
+- **`DependsOn(step)`**: Depends on a specific step instance
+- **`DependsOnSteps`**: Depends on steps by name (for built-in steps)
+- **`RequiredBy(step)`**: Marks this step as required by another step
+
+Example from the code:
+```csharp
+var pushImages = new PipelineStep {
+    Name = $"push-images-{DockerComposeEnvironment.Name}",
+    Action = PushImagesStep,
+    DependsOnSteps = [$"prepare-{DockerComposeEnvironment.Name}"] // Depends on built-in step
+};
+pushImages.DependsOn(configureRegistry); // Depends on our custom step
+
+var mergeEnv = new PipelineStep {
+    Name = $"merge-environment-{DockerComposeEnvironment.Name}",
+    Action = MergeEnvironmentFileStep
+};
+mergeEnv.DependsOn(prepareRemote);
+mergeEnv.DependsOn(pushImages); // Waits for both remote prep AND image push
+```
+
+### Key Components
+
+- **`DockerSSHPipeline`**: Implements `IPipelineStepProvider` to register custom steps
+- **`PipelineStep`**: Represents a unit of work with name, action, and dependencies
+- **`IReportingStep`**: Provides progress reporting with tasks and status updates
+- **`IInteractionService`**: Handles interactive prompts for missing configuration
+- **`PipelineStepContext`**: Provides logger, cancellation token, and reporting step to each step action
 
 ## Sample Project
 
@@ -206,12 +266,6 @@ The `WithSshDeploySupport` extension method currently doesn't accept parameters.
 - **Network Security**: Ensure SSH connections are properly secured
 - **Container Security**: Follow Docker security best practices for deployed containers
 
-## Future Enhancements
+## Extending the Pipeline
 
-This sample implementation demonstrates the foundation for more advanced deployment pipeline features:
-
-- **Multiple deployment targets**: Azure, AWS, Kubernetes, etc.
-- **CI/CD integration**: GitHub Actions, Azure DevOps, etc.
-- **Advanced orchestration**: Service mesh integration, load balancing
-- **Monitoring integration**: Health checks, logging, metrics collection
-- **Advanced SSH deployment scenarios**: multi-host deployments, blue-green deployment strategies, health check integration, rollback capabilities
+This sample demonstrates the foundation for building custom deployment pipelines. You can extend it by creating new `PipelineStep` instances with custom actions and declaring dependencies on other steps (including built-in steps like `prepare-env`). See the source code in `DockerSSHPipeline.cs` for examples of step creation and dependency composition.
