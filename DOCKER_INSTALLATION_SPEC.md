@@ -2,7 +2,7 @@
 
 ## Overview
 
-This spec focuses on enhancing AspirePipelines with automatic Docker installation capabilities, similar to Kamal's approach of ensuring Docker is available on target servers before deployment.
+This spec focuses on enhancing AspirePipelines with automatic Docker installation capabilities to ensure Docker is available on target servers before deployment.
 
 ## Current State
 
