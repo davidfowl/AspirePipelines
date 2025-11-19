@@ -64,7 +64,7 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
         var transferFiles = new PipelineStep { Name = $"transfer-files-{DockerComposeEnvironment.Name}", Action = TransferDeploymentFilesPipelineStep };
         transferFiles.DependsOn(mergeEnv);
 
-        var deploy = new PipelineStep { Name = $"docker-ssh-deploy-{DockerComposeEnvironment.Name}", Action = DeployApplicationStep };
+        var deploy = new PipelineStep { Name = $"docker-via-ssh-{DockerComposeEnvironment.Name}", Action = DeployApplicationStep };
         deploy.DependsOn(transferFiles);
 
         // Post-deploy: Extract dashboard login token from logs
