@@ -1,6 +1,6 @@
-#pragma warning disable ASPIREPUBLISHERS001 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
+#pragma warning disable ASPIREPIPELINES001 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
 
-using Aspire.Hosting.Publishing;
+using Aspire.Hosting.Pipelines;
 using System.Diagnostics;
 
 namespace Aspire.Hosting.Docker.Pipelines.Utilities;
@@ -143,7 +143,7 @@ public static class DockerCommandUtility
         }
     }
 
-    public static async Task CheckDockerAvailability(IPublishingStep step, CancellationToken cancellationToken)
+    public static async Task CheckDockerAvailability(IReportingStep step, CancellationToken cancellationToken)
     {
         await using var task = await step.CreateTaskAsync("Checking Docker availability", cancellationToken);
 
@@ -184,7 +184,7 @@ public static class DockerCommandUtility
         }
     }
 
-    public static async Task CheckDockerCompose(IPublishingStep step, CancellationToken cancellationToken)
+    public static async Task CheckDockerCompose(IReportingStep step, CancellationToken cancellationToken)
     {
         await using var task = await step.CreateTaskAsync("Checking Docker Compose availability", cancellationToken);
 
