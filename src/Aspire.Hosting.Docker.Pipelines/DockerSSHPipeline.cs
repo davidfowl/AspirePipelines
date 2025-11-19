@@ -1,148 +1,430 @@
+#pragma warning disable ASPIREPIPELINES001
 #pragma warning disable ASPIREINTERACTION001
-#pragma warning disable ASPIREPUBLISHERS001
+#pragma warning disable ASPIREPIPELINES002
 
 using Aspire.Hosting;
-using Aspire.Hosting.ApplicationModel;
-using Aspire.Hosting.Publishing;
 using Aspire.Hosting.Docker.Pipelines.Utilities;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Renci.SshNet;
 using Aspire.Hosting.Docker.Pipelines.Models;
+using Aspire.Hosting.Pipelines;
+using Aspire.Hosting.Docker;
 
-internal class DockerSSHPipeline : IAsyncDisposable
+internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeEnvironmentResource) : IAsyncDisposable
 {
     private SshClient? _sshClient = null;
     private ScpClient? _scpClient = null;
 
-    public async Task Deploy(DeployingContext context)
-    {
-        // Step 0: Prerequisites check
-        await CheckPrerequisitesConcurrently(context);
+    // Deployment state keys
+    private const string SshContextKey = "DockerSSH";
+    private const string RegistryContextKey = "DockerRegistry";
 
+    // Local state storage since IDeploymentStateManager does not expose generic Set/TryGet APIs here
+    private SSHConnectionContext? _sshContext;
+    private Dictionary<string, string>? _imageTags;
+    private RegistryConfiguration? _registryConfig;
+
+    public DockerComposeEnvironmentResource DockerComposeEnvironment { get; } = dockerComposeEnvironmentResource;
+
+    private string? _outputPath;
+
+    private string? _dashboardServiceName;
+
+    public string OutputPath => _outputPath ?? throw new InvalidOperationException("OutputPath is not set. Ensure the pipeline step to prepare the temporary directory has run.");
+
+    public IEnumerable<PipelineStep> CreateSteps(PipelineStepFactoryContext context)
+    {
+#pragma warning disable ASPIREPIPELINES004 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
+        _outputPath = context.PipelineContext.Services.GetRequiredService<IPipelineOutputService>().GetOutputDirectory();
+#pragma warning restore ASPIREPIPELINES004 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
+
+        // Base prerequisite step
+        var prereqs = new PipelineStep { Name = $"ssh-prereq-{DockerComposeEnvironment.Name}", Action = CheckPrerequisitesConcurrently };
+
+        // Step sequence mirroring the logical deployment flow
+        var prepareSshContext = new PipelineStep { Name = $"prepare-ssh-context-{DockerComposeEnvironment.Name}", Action = PrepareSSHContextStep };
+
+        var configureRegistry = new PipelineStep { Name = $"configure-registry-{DockerComposeEnvironment.Name}", Action = ConfigureRegistryStep };
+
+        var pushImages = new PipelineStep { Name = $"push-images-{DockerComposeEnvironment.Name}", Action = PushImagesStep, DependsOnSteps = [$"prepare-{DockerComposeEnvironment.Name}"] };
+        pushImages.DependsOn(configureRegistry);
+
+        var establishSsh = new PipelineStep { Name = $"establish-ssh-{DockerComposeEnvironment.Name}", Action = EstablishSSHConnectionStep }; // tests connectivity
+        establishSsh.DependsOn(prepareSshContext);
+
+        var prepareRemote = new PipelineStep { Name = $"prepare-remote-{DockerComposeEnvironment.Name}", Action = PrepareRemoteEnvironmentStep };
+        prepareRemote.DependsOn(establishSsh);
+
+        var mergeEnv = new PipelineStep { Name = $"merge-environment-{DockerComposeEnvironment.Name}", Action = MergeEnvironmentFileStep, DependsOnSteps = [$"prepare-{DockerComposeEnvironment.Name}"] };
+        mergeEnv.DependsOn(prepareRemote);
+        mergeEnv.DependsOn(pushImages);
+
+        var transferFiles = new PipelineStep { Name = $"transfer-files-{DockerComposeEnvironment.Name}", Action = TransferDeploymentFilesPipelineStep };
+        transferFiles.DependsOn(mergeEnv);
+
+        var deploy = new PipelineStep { Name = $"docker-via-ssh-{DockerComposeEnvironment.Name}", Action = DeployApplicationStep };
+        deploy.DependsOn(transferFiles);
+
+        // Post-deploy: Extract dashboard login token from logs
+        var extractDashboardToken = new PipelineStep { Name = $"extract-dashboard-token-{DockerComposeEnvironment.Name}", Action = ExtractDashboardLoginTokenStep };
+        extractDashboardToken.DependsOn(deploy);
+
+        // Final cleanup step to close SSH/SCP connections
+        var cleanup = new PipelineStep { Name = $"cleanup-ssh-{DockerComposeEnvironment.Name}", Action = CleanupSSHConnectionStep };
+        cleanup.DependsOn(extractDashboardToken);
+
+        var deploySshStep = new PipelineStep { Name = $"deploy-docker-ssh-{DockerComposeEnvironment.Name}", Action = context => Task.CompletedTask };
+        deploySshStep.DependsOn(cleanup);
+        deploySshStep.RequiredBy(WellKnownPipelineSteps.Deploy);
+
+        return [prereqs, prepareSshContext, configureRegistry, pushImages, establishSsh, prepareRemote, mergeEnv, transferFiles, deploy, extractDashboardToken, cleanup, deploySshStep];
+    }
+
+    public Task ConfigurePipelineAsync(PipelineConfigurationContext context)
+    {
+        var dockerComposeUpStep = context.Steps.FirstOrDefault(s => s.Name == $"docker-compose-up-{DockerComposeEnvironment.Name}");
+
+        var deployStep = context.Steps.FirstOrDefault(s => s.Name == WellKnownPipelineSteps.Deploy);
+
+        // Remove docker compose up from the deployment pipeline
+        // not needed for SSH deployment
+        deployStep?.DependsOnSteps.Remove($"docker-compose-up-{DockerComposeEnvironment.Name}");
+        dockerComposeUpStep?.RequiredBySteps.Remove(WellKnownPipelineSteps.Deploy);
+
+        // No additional configuration needed at this time
+        return Task.CompletedTask;
+    }
+
+
+    #region Deploy Step Helpers
+
+    private async Task EstablishAndTestSSHConnectionStepAsync(SSHConnectionContext sshContext, PipelineStepContext context)
+    {
+        var step = context.ReportingStep;
+        await EstablishAndTestSSHConnection(context, sshContext.TargetHost, sshContext.SshUsername, sshContext.SshPassword, sshContext.SshKeyPath, sshContext.SshPort, step, context.CancellationToken);
+        await step.SucceedAsync("SSH connection established and tested successfully");
+    }
+
+    private async Task PrepareRemoteEnvironmentStepAsync(SSHConnectionContext sshContext, PipelineStepContext context)
+    {
+        var step = context.ReportingStep;
+        await PrepareRemoteEnvironment(context, sshContext.RemoteDeployPath, step, context.CancellationToken);
+        await step.SucceedAsync("Remote environment ready for deployment");
+    }
+
+    private async Task TransferDeploymentFilesStepAsync(SSHConnectionContext sshContext, PipelineStepContext context)
+    {
+        var step = context.ReportingStep;
+        await TransferDeploymentFiles(sshContext.RemoteDeployPath, context, step, context.CancellationToken);
+        await step.SucceedAsync("File transfer completed");
+    }
+
+    private async Task DeployOnRemoteServerStepAsync(SSHConnectionContext sshContext, Dictionary<string, string> imageTags, PipelineStepContext context)
+    {
+        var step = context.ReportingStep;
+        var deploymentInfo = await DeployOnRemoteServer(context, sshContext.RemoteDeployPath, imageTags, step, context.CancellationToken);
+        await step.SucceedAsync($"Application deployed successfully! {deploymentInfo}");
+    }
+
+    private async Task CleanupSSHConnectionStep(PipelineStepContext context)
+    {
+        context.Logger.LogDebug("Starting SSH connection cleanup");
+        await CleanupSSHConnection(context);
+        context.Logger.LogDebug("SSH connection cleanup completed");
+    }
+    #endregion
+
+    #region Pipeline Step Implementations
+    private async Task PrepareSSHContextStep(PipelineStepContext context)
+    {
         var interactionService = context.Services.GetRequiredService<IInteractionService>();
         var configuration = context.Services.GetRequiredService<IConfiguration>();
-
-        // Get configuration defaults once
         var configDefaults = ConfigurationUtility.GetConfigurationDefaults(configuration);
 
-        // Step 1: Prepare SSH connection context (includes user prompting)
-        var sshContext = await PrepareSSHConnectionContext(context, configDefaults, interactionService);
+        _sshContext = await PrepareSSHConnectionContext(context, configDefaults, interactionService);
+    }
 
-        // Step 1: Verify deployment files exist
-        await using var verifyStep = await context.ActivityReporter.CreateStepAsync("Verify deployment files", context.CancellationToken);
+    private async Task ConfigureRegistryStep(PipelineStepContext context)
+    {
+        var configuration = context.Services.GetRequiredService<IConfiguration>();
+        var interactionService = context.Services.GetRequiredService<IInteractionService>();
 
+        var step = context.ReportingStep;
+
+        var section = configuration.GetSection(RegistryContextKey);
+
+        string registryUrl = section["RegistryUrl"] ?? "";
+        string? repositoryPrefix = section["RepositoryPrefix"];
+        string? registryUsername = section["RegistryUsername"];
+        string? registryPassword = section["RegistryPassword"];
+
+        if (!string.IsNullOrWhiteSpace(registryUrl) && !string.IsNullOrWhiteSpace(repositoryPrefix))
+        {
+            _registryConfig = new RegistryConfiguration(registryUrl, repositoryPrefix, registryUsername, registryPassword);
+            return;
+        }
+        else
+        {
+            var configDefaults = ConfigurationUtility.GetConfigurationDefaults(configuration);
+
+            var inputs = new InteractionInput[]
+            {
+            new() { Name = "registryUrl", Required = true, InputType = InputType.Text, Label = "Container Registry URL", Value = "docker.io" },
+            new() { Name = "repositoryPrefix", InputType = InputType.Text, Label = "Image Repository Prefix", Value = configDefaults.RepositoryPrefix },
+            new() { Name = "registryUsername", InputType = InputType.Text, Label = "Registry Username", Value = configDefaults.RegistryUsername },
+            new() { Name = "registryPassword", InputType = InputType.SecretText, Label = "Registry Password/Token" }
+            };
+
+            context.Logger.LogInformation("Collecting registry settings...");
+            var result = await interactionService.PromptInputsAsync(
+                "Container Registry Configuration",
+                "Provide container registry details (leave credentials blank for anonymous access).\n",
+                inputs,
+                cancellationToken: context.CancellationToken);
+
+            if (result.Canceled)
+            {
+                throw new InvalidOperationException("Registry configuration was canceled");
+            }
+
+            registryUrl = result.Data["registryUrl"].Value ?? throw new InvalidOperationException("Registry URL is required");
+            repositoryPrefix = result.Data["repositoryPrefix"].Value?.Trim();
+            registryUsername = result.Data["registryUsername"].Value;
+            registryPassword = result.Data["registryPassword"].Value;
+        }
+
+        if (!string.IsNullOrEmpty(registryUsername) && !string.IsNullOrEmpty(registryPassword))
+        {
+            await using var loginTask = await step.CreateTaskAsync("Authenticating", context.CancellationToken);
+            var loginResult = await DockerCommandUtility.ExecuteDockerLogin(registryUrl, registryUsername, registryPassword, context.CancellationToken);
+            if (loginResult.ExitCode != 0)
+            {
+                throw new InvalidOperationException($"Docker login failed: {loginResult.Error}");
+            }
+            await loginTask.SucceedAsync($"Authenticated with {registryUrl}", context.CancellationToken);
+        }
+        else
+        {
+            context.Logger.LogInformation("Skipping authentication (no credentials provided)");
+        }
+
+        _registryConfig = new RegistryConfiguration(registryUrl, repositoryPrefix, registryUsername, registryPassword);
+
+        // Persist
         try
         {
-            await using var verifyTask = await verifyStep.CreateTaskAsync("Checking for required files", context.CancellationToken);
+            var deploymentStateManager = context.Services.GetRequiredService<IDeploymentStateManager>();
+            var registryStateSection = await deploymentStateManager.AcquireSectionAsync(RegistryContextKey, context.CancellationToken);
+            registryStateSection.Data["RegistryUrl"] = registryUrl;
+            registryStateSection.Data["RepositoryPrefix"] = repositoryPrefix ?? string.Empty;
+            registryStateSection.Data["RegistryUsername"] = registryUsername ?? string.Empty;
+            registryStateSection.Data["RegistryPassword"] = registryPassword ?? string.Empty;
 
-            var envFileExists = await DeploymentFileUtility.VerifyDeploymentFiles(context);
-            if (envFileExists)
+            await deploymentStateManager.SaveSectionAsync(registryStateSection, context.CancellationToken);
+        }
+        catch (Exception ex)
+        {
+            context.Logger.LogDebug("Failed to persist registry configuration: {Message}", ex.Message);
+        }
+
+        await step.SucceedAsync("Registry configured");
+    }
+
+    private async Task PushImagesStep(PipelineStepContext context)
+    {
+        if (_registryConfig is null)
+        {
+            throw new InvalidOperationException("Registry not configured before pushing images");
+        }
+        _imageTags = await PushContainerImagesToRegistry(context, _registryConfig, context.CancellationToken);
+    }
+
+    private async Task EstablishSSHConnectionStep(PipelineStepContext context)
+    {
+        var sshContext = _sshContext;
+        if (sshContext is null)
+        {
+            throw new InvalidOperationException("SSH context not available for establishing connection");
+        }
+        await EstablishAndTestSSHConnectionStepAsync(sshContext, context);
+
+        // Save the SSH context to deployment state for future runs
+        var deploymentStateManager = context.Services.GetRequiredService<IDeploymentStateManager>();
+        var sshSection = await deploymentStateManager.AcquireSectionAsync(SshContextKey, context.CancellationToken);
+
+        // Save SSH context to state for future use
+        sshSection.Data[nameof(SSHConnectionContext.TargetHost)] = sshContext.TargetHost;
+        sshSection.Data[nameof(SSHConnectionContext.SshUsername)] = sshContext.SshUsername;
+        sshSection.Data[nameof(SSHConnectionContext.SshPassword)] = sshContext.SshPassword ?? "";
+        sshSection.Data[nameof(SSHConnectionContext.SshKeyPath)] = sshContext.SshKeyPath ?? "";
+        sshSection.Data[nameof(SSHConnectionContext.SshPort)] = sshContext.SshPort;
+        sshSection.Data[nameof(SSHConnectionContext.RemoteDeployPath)] = sshContext.RemoteDeployPath;
+        await deploymentStateManager.SaveSectionAsync(sshSection, context.CancellationToken);
+
+    }
+
+    private async Task PrepareRemoteEnvironmentStep(PipelineStepContext context)
+    {
+        var sshContext = _sshContext;
+        if (sshContext is null)
+        {
+            throw new InvalidOperationException("SSH context not available for preparing remote environment");
+        }
+        await PrepareRemoteEnvironmentStepAsync(sshContext, context);
+    }
+
+    private async Task MergeEnvironmentFileStep(PipelineStepContext context)
+    {
+        var sshContext = _sshContext;
+        if (sshContext is null)
+        {
+            throw new InvalidOperationException("SSH context not available for environment merge");
+        }
+        var imageTags = _imageTags;
+        if (imageTags is null)
+        {
+            throw new InvalidOperationException("Image tags not available for environment merge");
+        }
+        var interactionService = context.Services.GetRequiredService<IInteractionService>();
+        await MergeAndUpdateEnvironmentFile(sshContext.RemoteDeployPath, imageTags, context, interactionService, context.CancellationToken);
+    }
+
+    private async Task TransferDeploymentFilesPipelineStep(PipelineStepContext context)
+    {
+        var sshContext = _sshContext;
+        if (sshContext is null)
+        {
+            throw new InvalidOperationException("SSH context not available for file transfer");
+        }
+        await TransferDeploymentFilesStepAsync(sshContext, context);
+    }
+
+    private async Task DeployApplicationStep(PipelineStepContext context)
+    {
+        var sshContext = _sshContext;
+        if (sshContext is null)
+        {
+            throw new InvalidOperationException("SSH context not available for deployment");
+        }
+        var imageTags = _imageTags;
+        if (imageTags is null)
+        {
+            throw new InvalidOperationException("Image tags not available for deployment");
+        }
+        await DeployOnRemoteServerStepAsync(sshContext, imageTags, context);
+    }
+    #endregion
+
+    private async Task ExtractDashboardLoginTokenStep(PipelineStepContext context)
+    {
+        var sshContext = _sshContext;
+        if (sshContext is null)
+        {
+            throw new InvalidOperationException("SSH context not available for dashboard token extraction");
+        }
+
+        var step = context.ReportingStep;
+
+        // We'll attempt to locate the dashboard service logs (service name convention: <composeName>-dashboard)
+        var serviceName = _dashboardServiceName ?? throw new InvalidOperationException("Dashboard service name not identified during deployment");
+
+        // Poll up to 10 seconds (e.g. 5 attempts @ 2s) since the token may appear shortly after container start
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        string? token = null;
+        // Simplified regex: we're already filtering to lines that contain the phrase, so just capture after ?t=
+        var urlPattern = @"\?t=(?<tok>[A-Za-z0-9\-_.:]+)";
+
+        int attempt = 0;
+        while (DateTime.UtcNow < deadline && token is null && !context.CancellationToken.IsCancellationRequested)
+        {
+            attempt++;
+            await using var attemptTask = await step.CreateTaskAsync($"Log scan attempt {attempt}", context.CancellationToken);
+
+            // Use docker logs directly (serviceName is the container name). Tail a limited number of recent lines.
+            var logCommand = $"docker logs --tail 50 {serviceName}";
+            var result = await ExecuteSSHCommandWithOutput(context, logCommand, context.CancellationToken);
+
+            if (result.ExitCode != 0 || string.IsNullOrWhiteSpace(result.Output))
             {
-                await verifyTask.SucceedAsync("docker-compose.yml and .env found");
-                await verifyStep.SucceedAsync("Deployment files verified successfully");
+                context.Logger.LogDebug("No logs yet or command failed; will retry");
             }
             else
             {
-                await verifyTask.SucceedAsync("docker-compose.yml found, .env file missing but optional");
-                await verifyStep.SucceedAsync("Deployment files verified (optional .env missing)");
+                // Look at individual lines to find the phrase and extract token
+                var lines = result.Output.Split('\n');
+                foreach (var rawLine in lines)
+                {
+                    var line = rawLine.Trim();
+                    if (line.Length == 0) continue;
+                    if (line.IndexOf("Login to the dashboard at", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        // Attempt regex on this specific line
+                        var lineMatch = System.Text.RegularExpressions.Regex.Match(line, urlPattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                        if (lineMatch.Success && lineMatch.Groups["tok"].Success)
+                        {
+                            token = lineMatch.Groups["tok"].Value.Trim();
+                            break;
+                        }
+                        // Fallback: if line contains '?t=' extract substring after '?t='
+                        var idx = line.IndexOf("?t=", StringComparison.OrdinalIgnoreCase);
+                        if (token is null && idx >= 0)
+                        {
+                            var candidate = line[(idx + 3)..];
+                            // Trim trailing punctuation/spaces
+                            candidate = new string(candidate.TakeWhile(c => !char.IsWhiteSpace(c) && c != '\r').ToArray());
+                            if (candidate.Length > 0)
+                            {
+                                token = candidate;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (token is not null)
+                {
+                    await attemptTask.SucceedAsync("Token found", context.CancellationToken);
+                    break;
+                }
+                context.Logger.LogDebug("Token not found in current log snapshot");
+            }
+
+            if (token is null)
+            {
+                // Delay before next attempt
+                try { await Task.Delay(TimeSpan.FromSeconds(2), context.CancellationToken); } catch { break; }
+                await attemptTask.SucceedAsync("Retrying", context.CancellationToken);
             }
         }
-        catch (Exception ex)
+
+        if (token is null)
         {
-            await verifyStep.FailAsync($"Failed to verify deployment files: {ex.Message}");
-            throw;
+            await step.WarnAsync("Dashboard login token not detected within 20s polling window.", context.CancellationToken);
+            return;
         }
 
-        // Step 2: Push container images to registry
-        var imageTags = await PushContainerImagesToRegistry(context, interactionService, configDefaults, context.CancellationToken);
-
-        // Step 3: Establish and test SSH connection
-        await using var sshTestStep = await context.ActivityReporter.CreateStepAsync("Establish and test SSH connection", context.CancellationToken);
-
-        try
-        {
-            await EstablishAndTestSSHConnection(sshContext.TargetHost, sshContext.SshUsername, sshContext.SshPassword, sshContext.SshKeyPath, sshContext.SshPort, sshTestStep, context.CancellationToken);
-            await sshTestStep.SucceedAsync("SSH connection established and tested successfully");
-        }
-        catch (Exception ex)
-        {
-            await sshTestStep.FailAsync($"SSH connection failed: {ex.Message}");
-            throw;
-        }
-
-        // Step 4: Prepare remote environment
-        await using var prepareStep = await context.ActivityReporter.CreateStepAsync("Prepare remote environment", context.CancellationToken);
-
-        try
-        {
-            await PrepareRemoteEnvironment(sshContext.RemoteDeployPath, prepareStep, context.CancellationToken);
-            await prepareStep.SucceedAsync("Remote environment ready for deployment");
-        }
-        catch (Exception ex)
-        {
-            await prepareStep.FailAsync($"Failed to prepare remote environment: {ex.Message}");
-            throw;
-        }
-
-        await MergeAndUpdateEnvironmentFile(sshContext.RemoteDeployPath, imageTags, context, interactionService, context.CancellationToken);
-
-        // Step 5: Transfer files to target server
-        await using var transferStep = await context.ActivityReporter.CreateStepAsync("Transfer deployment files", context.CancellationToken);
-
-        try
-        {
-            await TransferDeploymentFiles(sshContext.RemoteDeployPath, context, transferStep, context.CancellationToken);
-            await transferStep.SucceedAsync("File transfer completed");
-        }
-        catch (Exception ex)
-        {
-            await transferStep.FailAsync($"Failed to transfer files: {ex.Message}");
-            throw;
-        }
-
-        // Step 6: Deploy on target server
-        await using var deployStep = await context.ActivityReporter.CreateStepAsync("Deploy application", context.CancellationToken);
-
-        try
-        {
-            var deploymentInfo = await DeployOnRemoteServer(sshContext.RemoteDeployPath, imageTags, deployStep, context.CancellationToken);
-            await deployStep.SucceedAsync($"Application deployed successfully! {deploymentInfo}");
-        }
-        catch (Exception ex)
-        {
-            await deployStep.FailAsync($"Failed to deploy on server: {ex.Message}");
-            throw;
-        }
-        finally
-        {
-            // Clean up SSH connection
-            await CleanupSSHConnection();
-        }
+        // Persist token to local output directory
+        var tokenFile = Path.Combine(OutputPath, "dashboard-login-token.txt");
+        await File.WriteAllTextAsync(tokenFile, token + Environment.NewLine, context.CancellationToken);
+        await step.SucceedAsync($"Dashboard login token written to {tokenFile}");
     }
 
-    private async Task CheckPrerequisitesConcurrently(DeployingContext context)
+    private async Task CheckPrerequisitesConcurrently(PipelineStepContext context)
     {
-        await using var prerequisiteStep = await context.ActivityReporter.CreateStepAsync("Checking deployment prerequisites", context.CancellationToken);
+        var step = context.ReportingStep;
 
         // Create all prerequisite check tasks
-        var dockerTask = DockerCommandUtility.CheckDockerAvailability(prerequisiteStep, context.CancellationToken);
-        var dockerComposeTask = DockerCommandUtility.CheckDockerCompose(prerequisiteStep, context.CancellationToken);
+        var dockerTask = DockerCommandUtility.CheckDockerAvailability(step, context.CancellationToken);
+        var dockerComposeTask = DockerCommandUtility.CheckDockerCompose(step, context.CancellationToken);
 
         // Run all prerequisite checks concurrently
-        try
-        {
-            await Task.WhenAll(dockerTask, dockerComposeTask);
-            await prerequisiteStep.SucceedAsync("All prerequisites verified successfully");
-        }
-        catch (Exception ex)
-        {
-            await prerequisiteStep.FailAsync($"Prerequisites check failed: {ex.Message}");
-            throw;
-        }
+        await Task.WhenAll(dockerTask, dockerComposeTask);
+        await step.SucceedAsync("All prerequisites verified successfully");
     }
 
-    private async Task<SSHConnectionContext> PrepareSSHConnectionContext(DeployingContext context, DockerSSHConfiguration configDefaults, IInteractionService interactionService)
+    private async Task<SSHConnectionContext> PrepareSSHConnectionContext(PipelineStepContext context, DockerSSHConfiguration configDefaults, IInteractionService interactionService)
     {
         // Local function to build host options for selection
         static List<KeyValuePair<string, string>> BuildHostOptions(DockerSSHConfiguration configDefaults, SSHConfiguration sshConfig)
@@ -154,18 +436,6 @@ internal class DockerSSHPipeline : IAsyncDisposable
             {
                 hostOptions.Add(new KeyValuePair<string, string>(configDefaults.SshHost, $"{configDefaults.SshHost} (configured)"));
             }
-
-            // Add discovered known hosts (avoid duplicates)
-            foreach (var host in sshConfig.KnownHosts)
-            {
-                if (string.IsNullOrEmpty(configDefaults.SshHost) || host != configDefaults.SshHost)
-                {
-                    hostOptions.Add(new KeyValuePair<string, string>(host, host));
-                }
-            }
-
-            // Add custom host option
-            hostOptions.Add(new KeyValuePair<string, string>("CUSTOM", "Enter custom host..."));
 
             return hostOptions;
         }
@@ -185,9 +455,6 @@ internal class DockerSSHPipeline : IAsyncDisposable
             // Add password authentication option
             sshKeyOptions.Add(new KeyValuePair<string, string>("", "Password Authentication (no key)"));
 
-            // Add custom key option
-            sshKeyOptions.Add(new KeyValuePair<string, string>("CUSTOM", "Enter custom key path..."));
-
             return sshKeyOptions;
         }
 
@@ -197,10 +464,12 @@ internal class DockerSSHPipeline : IAsyncDisposable
             var inputs = new InteractionInput[]
             {
                 new() {
+                    Name = label,
                     InputType = InputType.Choice,
+                    AllowCustomChoice = true,
                     Label = label,
                     Options = options,
-                    Value = defaultValue ?? options.FirstOrDefault().Key
+                    Value = defaultValue
                 }
             };
 
@@ -215,13 +484,14 @@ internal class DockerSSHPipeline : IAsyncDisposable
         }
 
         // Local function for single text input prompts
-        async Task<string> PromptForSingleText(string title, string description, string label, bool required = true)
+        async Task<string> PromptForSingleText(string title, string description, string label, bool required = true, bool secret = false)
         {
             var inputs = new InteractionInput[]
             {
                 new() {
+                    Name = label,
                     Required = required,
-                    InputType = InputType.Text,
+                    InputType = secret ? InputType.SecretText: InputType.Text,
                     Label = label
                 }
             };
@@ -245,43 +515,12 @@ internal class DockerSSHPipeline : IAsyncDisposable
         // Local function to prompt for target host
         async Task<string> PromptForTargetHost(List<KeyValuePair<string, string>> hostOptions)
         {
-            // Check if there are any real host options (excluding the "CUSTOM" option)
-            var realHostOptions = hostOptions.Where(option => option.Key != "CUSTOM");
-            
-            // If no configured or known hosts available, skip choice prompt and go directly to custom host input
-            if (!realHostOptions.Any())
-            {
-                return await PromptForSingleText(
+            // First prompt: Host selection, it might be an IP address, so keep it secret
+            return await PromptForSingleText(
                     "Target Host Configuration",
                     "No configured or known hosts found. Please enter the target server host for deployment.",
                     "Target Server Host"
                 );
-            }
-
-            // First prompt: Target host selection
-            var selectedHost = await PromptForChoice(
-                "Target Host Selection",
-                "Please select the target server for deployment.",
-                "Target Server Host",
-                hostOptions
-            );
-
-            // Second prompt: Custom host if needed
-            if (selectedHost == "CUSTOM")
-            {
-                return await PromptForSingleText(
-                    "Custom Host Configuration",
-                    "Please enter the custom host details.",
-                    "Custom Host"
-                );
-            }
-
-            if (string.IsNullOrEmpty(selectedHost))
-            {
-                throw new InvalidOperationException("Target server host is required");
-            }
-
-            return selectedHost;
         }
 
         // Local function to prompt for SSH key path
@@ -298,16 +537,6 @@ internal class DockerSSHPipeline : IAsyncDisposable
                 defaultKeyPath
             );
 
-            // Second prompt: Custom key path if needed
-            if (selectedKeyPath == "CUSTOM")
-            {
-                return await PromptForSingleText(
-                    "Custom SSH Key Configuration",
-                    "Please enter the path to your SSH private key file.",
-                    "Custom SSH Key Path"
-                );
-            }
-
             // Return the selected key path (could be empty for password auth, or an actual path)
             return string.IsNullOrEmpty(selectedKeyPath) ? null : selectedKeyPath;
         }
@@ -319,22 +548,26 @@ internal class DockerSSHPipeline : IAsyncDisposable
             var inputs = new InteractionInput[]
             {
                 new() {
+                    Name = "sshUsername",
                     Required = true,
                     InputType = InputType.Text,
                     Label = "SSH Username",
                     Value = configDefaults.SshUsername ?? "root"
                 },
                 new() {
+                    Name = "sshPassword",
                     InputType = InputType.SecretText,
                     Label = "SSH Password",
 
                 },
                 new() {
+                    Name = "sshPort",
                     InputType = InputType.Text,
                     Label = "SSH Port",
                     Value = !string.IsNullOrEmpty(configDefaults.SshPort) && configDefaults.SshPort != "22" ? configDefaults.SshPort : "22"
                 },
                 new() {
+                    Name = "remoteDeployPath",
                     InputType = InputType.Text,
                     Label = "Remote Deploy Path",
                     Value = !string.IsNullOrEmpty(configDefaults.RemoteDeployPath) ? configDefaults.RemoteDeployPath : sshConfig.DefaultDeployPath
@@ -352,12 +585,38 @@ internal class DockerSSHPipeline : IAsyncDisposable
                 throw new InvalidOperationException("SSH configuration was canceled");
             }
 
-            var sshUsername = result.Data[0].Value ?? throw new InvalidOperationException("SSH username is required");
-            var sshPassword = string.IsNullOrEmpty(result.Data[1].Value) ? null : result.Data[1].Value;
-            var sshPort = result.Data[2].Value ?? "22";
-            var remoteDeployPath = result.Data[3].Value ?? $"/home/{sshUsername}/aspire-app";
+            var sshUsername = result.Data["sshUsername"].Value ?? throw new InvalidOperationException("SSH username is required");
+            var sshPassword = string.IsNullOrEmpty(result.Data["sshPassword"].Value) ? null : result.Data["sshPassword"].Value;
+            var sshPort = result.Data["sshPort"].Value ?? "22";
+            var remoteDeployPath = result.Data["remoteDeployPath"].Value ?? $"/home/{sshUsername}/aspire-app";
 
             return (sshUsername, sshPassword, sshPort, remoteDeployPath);
+        }
+
+        // Try to load the stated SSH context if available
+        var configuration = context.Services.GetRequiredService<IConfiguration>();
+        var section = configuration.GetSection(SshContextKey);
+
+        var targetHost = section[nameof(SSHConnectionContext.TargetHost)];
+        var sshUsername = section[nameof(SSHConnectionContext.SshUsername)];
+        var sshPort = section[nameof(SSHConnectionContext.SshPort)];
+        var sshPassword = section[nameof(SSHConnectionContext.SshPassword)];
+        var sshKeyPath = section[nameof(SSHConnectionContext.SshKeyPath)];
+        var remoteDeployPath = section[nameof(SSHConnectionContext.RemoteDeployPath)];
+
+        if (!string.IsNullOrEmpty(targetHost) &&
+            !string.IsNullOrEmpty(sshUsername) &&
+            !string.IsNullOrEmpty(sshPort))
+        {
+            return new SSHConnectionContext
+            {
+                TargetHost = targetHost,
+                SshUsername = sshUsername,
+                SshPassword = string.IsNullOrEmpty(sshPassword) ? null : sshPassword,
+                SshKeyPath = string.IsNullOrEmpty(sshKeyPath) ? null : sshKeyPath,
+                SshPort = string.IsNullOrEmpty(sshPort) ? "22" : sshPort,
+                RemoteDeployPath = string.IsNullOrEmpty(remoteDeployPath) ? $"/home/{sshUsername}/aspire-app" : remoteDeployPath
+            };
         }
 
         // Main method logic starts here
@@ -368,13 +627,13 @@ internal class DockerSSHPipeline : IAsyncDisposable
         var hostOptions = BuildHostOptions(configDefaults, sshConfig);
 
         // Get target host through progressive prompting
-        var targetHost = await PromptForTargetHost(hostOptions);
+        targetHost ??= await PromptForTargetHost(hostOptions);
 
         // Build SSH key options for selection
         var sshKeyOptions = BuildSshKeyOptions(sshConfig);
 
         // Get SSH key path through progressive prompting
-        var sshKeyPath = await PromptForSshKeyPath(sshKeyOptions, configDefaults, sshConfig);
+        sshKeyPath ??= await PromptForSshKeyPath(sshKeyOptions, configDefaults, sshConfig);
 
         // Get SSH configuration details
         var sshDetails = await PromptForSshDetails(targetHost, sshKeyPath, configDefaults, sshConfig);
@@ -386,7 +645,8 @@ internal class DockerSSHPipeline : IAsyncDisposable
         }
 
         // Return the final SSH connection context
-        return new SSHConnectionContext
+
+        var sshContext = new SSHConnectionContext
         {
             TargetHost = targetHost,
             SshUsername = sshDetails.SshUsername,
@@ -395,46 +655,43 @@ internal class DockerSSHPipeline : IAsyncDisposable
             SshPort = sshDetails.SshPort,
             RemoteDeployPath = ExpandRemotePath(sshDetails.RemoteDeployPath)
         };
+
+        return sshContext;
     }
 
-    private async Task PrepareRemoteEnvironment(string deployPath, IPublishingStep step, CancellationToken cancellationToken)
+    private async Task PrepareRemoteEnvironment(PipelineStepContext context, string deployPath, IReportingStep step, CancellationToken cancellationToken)
     {
         await using var createDirTask = await step.CreateTaskAsync("Creating deployment directory", cancellationToken);
 
         // Create deployment directory
-        await ExecuteSSHCommand($"mkdir -p {deployPath}", cancellationToken);
+        await ExecuteSSHCommand(context, $"mkdir -p {deployPath}", cancellationToken);
 
         await createDirTask.SucceedAsync($"Directory created: {deployPath}", cancellationToken: cancellationToken);
 
         await using var dockerCheckTask = await step.CreateTaskAsync("Verifying Docker installation", cancellationToken);
 
         // Check if Docker is installed and get version info
-        var dockerVersionCheck = await ExecuteSSHCommandWithOutput("docker --version", cancellationToken);
+        var dockerVersionCheck = await ExecuteSSHCommandWithOutput(context, "docker --version", cancellationToken);
         if (dockerVersionCheck.ExitCode != 0)
         {
-            await dockerCheckTask.FailAsync($"Docker is not installed on the target server. Error: {dockerVersionCheck.Error}\nCommand: docker --version\nOutput: {dockerVersionCheck.Output}", cancellationToken);
             throw new InvalidOperationException($"Docker is not installed on the target server. Error: {dockerVersionCheck.Error}");
         }
 
-        await dockerCheckTask.UpdateAsync("Verifying Docker daemon status...", cancellationToken);
+        context.Logger.LogDebug("Verifying Docker daemon status...");
 
         // Check if Docker daemon is running
-        var dockerInfoCheck = await ExecuteSSHCommandWithOutput("docker info --format '{{.ServerVersion}}' 2>/dev/null", cancellationToken);
+        var dockerInfoCheck = await ExecuteSSHCommandWithOutput(context, "docker info --format '{{.ServerVersion}}' 2>/dev/null", cancellationToken);
         if (dockerInfoCheck.ExitCode != 0)
         {
-            await dockerCheckTask.FailAsync($"Docker daemon is not running on the target server. Error: {dockerInfoCheck.Error}\nCommand: docker info --format '{{{{.ServerVersion}}}}' 2>/dev/null\nOutput: {dockerInfoCheck.Output}", cancellationToken);
             throw new InvalidOperationException($"Docker daemon is not running on the target server. Error: {dockerInfoCheck.Error}");
         }
 
-        await dockerCheckTask.UpdateAsync("Checking Docker Compose availability...", cancellationToken);
+        context.Logger.LogDebug("Checking Docker Compose availability...");
 
         // Check if Docker Compose is available
-        var composeCheck = await ExecuteSSHCommandWithOutput("docker compose version", cancellationToken);
+        var composeCheck = await ExecuteSSHCommandWithOutput(context, "docker compose version", cancellationToken);
         if (composeCheck.ExitCode != 0)
         {
-            await dockerCheckTask.FailAsync($"Docker Compose is not available on the target server. " +
-                $"Command 'docker compose version' failed with exit code {composeCheck.ExitCode}. " +
-                $"Error: {composeCheck.Error}", cancellationToken);
             throw new InvalidOperationException($"Docker Compose is not available on the target server. " +
                 $"Command 'docker compose version' failed with exit code {composeCheck.ExitCode}. " +
                 $"Error: {composeCheck.Error}");
@@ -445,150 +702,90 @@ internal class DockerSSHPipeline : IAsyncDisposable
         await using var permissionsTask = await step.CreateTaskAsync("Checking permissions and resources", cancellationToken);
 
         // Check if user can run Docker commands without sudo
-        var dockerPermCheck = await ExecuteSSHCommandWithOutput("docker ps > /dev/null 2>&1 && echo 'OK' || echo 'SUDO_REQUIRED'", cancellationToken);
+        var dockerPermCheck = await ExecuteSSHCommandWithOutput(context, "docker ps > /dev/null 2>&1 && echo 'OK' || echo 'SUDO_REQUIRED'", cancellationToken);
         if (dockerPermCheck.Output.Trim() == "SUDO_REQUIRED")
         {
-            await permissionsTask.FailAsync($"User does not have permission to run Docker commands. Add user to 'docker' group and restart the session.\nCommand: docker ps > /dev/null 2>&1 && echo 'OK' || echo 'SUDO_REQUIRED'\nOutput: {dockerPermCheck.Output}\nError: {dockerPermCheck.Error}", cancellationToken);
             throw new InvalidOperationException($"User does not have permission to run Docker commands. Add user to 'docker' group and restart the session.");
         }
 
         // Check if there are any existing containers that might conflict
-        var existingContainersCheck = await ExecuteSSHCommandWithOutput($"cd {deployPath} 2>/dev/null && (docker compose ps -q 2>/dev/null || docker-compose ps -q 2>/dev/null) | wc -l || echo '0'", cancellationToken);
+        var existingContainersCheck = await ExecuteSSHCommandWithOutput(context, $"cd {deployPath} 2>/dev/null && (docker compose ps -q 2>/dev/null || docker-compose ps -q 2>/dev/null) | wc -l || echo '0'", cancellationToken);
         var existingContainers = existingContainersCheck.Output?.Trim() ?? "0";
 
         await permissionsTask.SucceedAsync($"Permissions and resources validated. Existing containers: {existingContainers}", cancellationToken: cancellationToken);
     }
 
-    private async Task TransferDeploymentFiles(string deployPath, DeployingContext context, IPublishingStep step, CancellationToken cancellationToken)
+    private async Task TransferDeploymentFiles(string deployPath, PipelineStepContext context, IReportingStep step, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrEmpty(context.OutputPath))
+        // prepare-env step consistently outputs docker-compose.yaml
+        const string dockerComposeFile = "docker-compose.yaml";
+        var localPath = Path.Combine(OutputPath, dockerComposeFile);
+
+        context.Logger.LogInformation("Scanning files for transfer...");
+        if (!File.Exists(localPath))
         {
-            throw new InvalidOperationException("Deployment output path not available");
+            throw new InvalidOperationException($"Required file not found: {dockerComposeFile} at {localPath}. Ensure prepare-{DockerComposeEnvironment.Name} step has run.");
         }
 
-        await using var scanTask = await step.CreateTaskAsync("Scanning files for transfer", cancellationToken);
+        context.Logger.LogDebug("Found {DockerComposeFile}, .env file handled separately", dockerComposeFile);
 
-        // Check for both .yml and .yaml extensions for docker-compose file
-        var dockerComposeFile = File.Exists(Path.Combine(context.OutputPath, "docker-compose.yml"))
-            ? "docker-compose.yml"
-            : "docker-compose.yaml";
+        await using var copyTask = await step.CreateTaskAsync("Copying docker-compose.yaml to remote server", cancellationToken);
 
-        var filesToTransfer = new[]
+        var remotePath = $"{deployPath}/{dockerComposeFile}";
+        await TransferFile(context, localPath, remotePath, cancellationToken);
+
+        await copyTask.SucceedAsync($"{dockerComposeFile} transferred successfully", cancellationToken: cancellationToken);
+
+        await using var verifyTask = await step.CreateTaskAsync("Verifying file on remote server", cancellationToken);
+
+        // Check if file exists and get its size
+        var verifyResult = await ExecuteSSHCommandWithOutput(context, $"ls -la '{remotePath}' 2>/dev/null || echo 'FILE_NOT_FOUND'", cancellationToken);
+
+        if (verifyResult.ExitCode != 0 || verifyResult.Output.Contains("FILE_NOT_FOUND"))
         {
-            (dockerComposeFile, true)   // Required (either .yml or .yaml)
-            // Note: .env file is now handled separately in MergeAndUpdateEnvironmentFile
-        };
-
-        var transferredFiles = new List<string>();
-        var skippedFiles = new List<string>();
-
-        foreach (var (file, required) in filesToTransfer)
-        {
-            var localPath = Path.Combine(context.OutputPath, file);
-            if (File.Exists(localPath))
-            {
-                transferredFiles.Add(file);
-            }
-            else if (required)
-            {
-                await scanTask.FailAsync($"Required file not found: {file} at {localPath}", cancellationToken);
-                throw new InvalidOperationException($"Required file not found: {file} at {localPath}");
-            }
-            else
-            {
-                skippedFiles.Add(file);
-            }
+            throw new InvalidOperationException($"File transfer verification failed: {dockerComposeFile} not found on remote server");
         }
 
-        await scanTask.SucceedAsync($"Files scanned: {transferredFiles.Count} to transfer, .env file handled separately", cancellationToken: cancellationToken);
+        // Get local file size for comparison
+        var localFileInfo = new FileInfo(localPath);
 
-        await using var copyTask = await step.CreateTaskAsync("Copying files to remote server", cancellationToken);
-
-        foreach (var file in transferredFiles)
+        // Extract remote file size from ls output (5th column in ls -la output)
+        var lsOutput = verifyResult.Output.Trim();
+        var parts = lsOutput.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length >= 5 && long.TryParse(parts[4], out var remoteSize))
         {
-            var localPath = Path.Combine(context.OutputPath, file);
-            await copyTask.UpdateAsync($"Transferring {file}...", cancellationToken);
-
-            var remotePath = $"{deployPath}/{file}";
-            await TransferFile(localPath, remotePath, cancellationToken);
-        }
-
-        await copyTask.SucceedAsync($"All {transferredFiles.Count} files transferred successfully", cancellationToken: cancellationToken);
-
-        await using var verifyTask = await step.CreateTaskAsync("Verifying files on remote server", cancellationToken);
-
-        foreach (var file in transferredFiles)
-        {
-            var remotePath = $"{deployPath}/{file}";
-
-            // Check if file exists and get its size
-            var verifyResult = await ExecuteSSHCommandWithOutput($"ls -la '{remotePath}' 2>/dev/null || echo 'FILE_NOT_FOUND'", cancellationToken);
-
-            if (verifyResult.ExitCode != 0 || verifyResult.Output.Contains("FILE_NOT_FOUND"))
+            if (localFileInfo.Length != remoteSize)
             {
-                await verifyTask.FailAsync($"File verification failed for {file}: File not found at {remotePath}", cancellationToken);
-                throw new InvalidOperationException($"File transfer verification failed: {file} not found on remote server");
+                throw new InvalidOperationException($"File transfer verification failed: Size mismatch for {dockerComposeFile}");
             }
 
-            // Get local file size for comparison
-            var localPath = Path.Combine(context.OutputPath, file);
-            var localFileInfo = new FileInfo(localPath);
-
-            // Extract remote file size from ls output (5th column in ls -la output)
-            var lsOutput = verifyResult.Output.Trim();
-            var parts = lsOutput.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length >= 5 && long.TryParse(parts[4], out var remoteSize))
-            {
-                if (localFileInfo.Length != remoteSize)
-                {
-                    await verifyTask.FailAsync($"File size mismatch for {file}: Local={localFileInfo.Length} bytes, Remote={remoteSize} bytes", cancellationToken);
-                    throw new InvalidOperationException($"File transfer verification failed: Size mismatch for {file}");
-                }
-
-                await verifyTask.UpdateAsync($"✓ {file} verified ({localFileInfo.Length} bytes)", cancellationToken);
-            }
-            else
-            {
-                // Fallback: just check file exists with a simpler test
-                var existsResult = await ExecuteSSHCommandWithOutput($"test -f '{remotePath}' && echo 'EXISTS' || echo 'NOT_FOUND'", cancellationToken);
-                if (existsResult.Output.Trim() == "EXISTS")
-                {
-                    await verifyTask.UpdateAsync($"✓ {file} verified", cancellationToken);
-                }
-                else
-                {
-                    await verifyTask.FailAsync($"File verification failed for {file}: File does not exist at {remotePath}", cancellationToken);
-                    throw new InvalidOperationException($"File transfer verification failed: {file} not found on remote server");
-                }
-            }
-        }
-
-        await verifyTask.SucceedAsync($"All {transferredFiles.Count} files verified on remote server", cancellationToken: cancellationToken);
-
-        await using var summaryTask = await step.CreateTaskAsync("Deployment directory summary", cancellationToken);
-
-        // Show final directory listing with file details
-        var dirListResult = await ExecuteSSHCommandWithOutput($"ls -la '{deployPath}'", cancellationToken);
-        if (dirListResult.ExitCode == 0)
-        {
-            await summaryTask.SucceedAsync($"Deployment directory contents:\nCommand: ls -la '{deployPath}'\n{dirListResult.Output.Trim()}", cancellationToken: cancellationToken);
+            await verifyTask.SucceedAsync($"✓ {dockerComposeFile} verified ({localFileInfo.Length} bytes)", cancellationToken: cancellationToken);
         }
         else
         {
-            await summaryTask.WarnAsync($"Could not list deployment directory: {dirListResult.Error}", cancellationToken);
+            // Fallback: just check file exists with a simpler test
+            var existsResult = await ExecuteSSHCommandWithOutput(context, $"test -f '{remotePath}' && echo 'EXISTS' || echo 'NOT_FOUND'", cancellationToken);
+            if (existsResult.Output.Trim() == "EXISTS")
+            {
+                await verifyTask.SucceedAsync($"✓ {dockerComposeFile} verified", cancellationToken: cancellationToken);
+            }
+            else
+            {
+                throw new InvalidOperationException($"File transfer verification failed: {dockerComposeFile} not found on remote server");
+            }
         }
     }
 
-    private async Task<string> DeployOnRemoteServer(string deployPath, Dictionary<string, string> imageTags, IPublishingStep step, CancellationToken cancellationToken)
+    private async Task<string> DeployOnRemoteServer(PipelineStepContext context, string deployPath, Dictionary<string, string> imageTags, IReportingStep step, CancellationToken cancellationToken)
     {
         await using var stopTask = await step.CreateTaskAsync("Stopping existing containers", cancellationToken);
 
         // Check if any containers are currently running in this deployment
-        var existingCheck = await ExecuteSSHCommandWithOutput(
+        var existingCheck = await ExecuteSSHCommandWithOutput(context,
             $"cd {deployPath} && (docker compose ps -q || docker-compose ps -q || true) 2>/dev/null | wc -l", cancellationToken);
 
         // Stop existing containers if any
-        var stopResult = await ExecuteSSHCommandWithOutput(
+        var stopResult = await ExecuteSSHCommandWithOutput(context,
             $"cd {deployPath} && (docker compose down || docker-compose down || true)", cancellationToken);
 
         if (stopResult.ExitCode == 0 && !string.IsNullOrEmpty(stopResult.Output))
@@ -604,10 +801,10 @@ internal class DockerSSHPipeline : IAsyncDisposable
 
         await using var pullTask = await step.CreateTaskAsync("Pulling latest images", cancellationToken);
 
-        await pullTask.UpdateAsync("Pulling latest container images...", cancellationToken);
+        context.Logger.LogDebug("Pulling latest container images...");
 
         // Pull latest images (if using registry) - non-fatal if fails
-        var pullResult = await ExecuteSSHCommandWithOutput(
+        var pullResult = await ExecuteSSHCommandWithOutput(context,
             $"cd {deployPath} && (docker compose pull || docker-compose pull || true)", cancellationToken);
 
         if (!string.IsNullOrEmpty(pullResult.Output))
@@ -621,20 +818,19 @@ internal class DockerSSHPipeline : IAsyncDisposable
 
         await using var startTask = await step.CreateTaskAsync("Starting new containers", cancellationToken);
 
-        await startTask.UpdateAsync("Starting application containers...", cancellationToken);
+        context.Logger.LogDebug("Starting application containers...");
 
         // Start services
-        var startResult = await ExecuteSSHCommandWithOutput(
+        var startResult = await ExecuteSSHCommandWithOutput(context,
             $"cd {deployPath} && (docker compose up -d || docker-compose up -d)", cancellationToken);
 
         if (startResult.ExitCode != 0)
         {
             // Try to get more detailed error information
-            var logsResult = await ExecuteSSHCommandWithOutput(
+            var logsResult = await ExecuteSSHCommandWithOutput(context,
                 $"cd {deployPath} && (docker compose logs --tail=50 || docker-compose logs --tail=50 || true)", cancellationToken);
 
             var errorDetails = string.IsNullOrEmpty(logsResult.Output) ? startResult.Error : logsResult.Output;
-            await startTask.FailAsync($"Failed to start containers: {startResult.Error}\nCommand: cd {deployPath} && (docker compose up -d || docker-compose up -d)\nOutput: {startResult.Output}\nContainer logs:\n{errorDetails}", cancellationToken);
             throw new InvalidOperationException($"Failed to start containers: {startResult.Error}\n\nContainer logs:\n{errorDetails}");
         }
 
@@ -650,15 +846,17 @@ internal class DockerSSHPipeline : IAsyncDisposable
         // Try to extract port information
         var serviceUrls = await PortInformationUtility.ExtractPortInformation(deployPath, _sshClient!, cancellationToken);
 
+        _dashboardServiceName = serviceUrls.FirstOrDefault(s => s.Key.Contains(DockerComposeEnvironment.Name + "-dashboard", StringComparison.OrdinalIgnoreCase)).Key;
+
         // Format port information as a nice table
         var serviceTable = PortInformationUtility.FormatServiceUrlsAsTable(serviceUrls);
 
         return $"Services running: {healthyServices} of {finalServiceStatuses.Count} containers healthy.\n{serviceTable}";
     }
 
-    private async Task TransferFile(string localPath, string remotePath, CancellationToken cancellationToken)
+    private async Task TransferFile(PipelineStepContext context, string localPath, string remotePath, CancellationToken cancellationToken)
     {
-        Console.WriteLine($"[DEBUG] Transferring file {localPath} to {remotePath}");
+        context.Logger.LogDebug("Transferring file {LocalPath} to {RemotePath}", localPath, remotePath);
 
         try
         {
@@ -669,7 +867,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
 
             using var fileStream = File.OpenRead(localPath);
             await Task.Run(() => _scpClient.Upload(fileStream, remotePath), cancellationToken);
-            Console.WriteLine($"[DEBUG] File transfer completed successfully");
+            context.Logger.LogDebug("File transfer completed successfully");
         }
         catch (Exception ex)
         {
@@ -677,9 +875,9 @@ internal class DockerSSHPipeline : IAsyncDisposable
         }
     }
 
-    private async Task ExecuteSSHCommand(string command, CancellationToken cancellationToken)
+    private async Task ExecuteSSHCommand(PipelineStepContext context, string command, CancellationToken cancellationToken)
     {
-        var result = await ExecuteSSHCommandWithOutput(command, cancellationToken);
+        var result = await ExecuteSSHCommandWithOutput(context, command, cancellationToken);
 
         if (result.ExitCode != 0)
         {
@@ -687,9 +885,9 @@ internal class DockerSSHPipeline : IAsyncDisposable
         }
     }
 
-    private async Task<(int ExitCode, string Output, string Error)> ExecuteSSHCommandWithOutput(string command, CancellationToken cancellationToken)
+    private async Task<(int ExitCode, string Output, string Error)> ExecuteSSHCommandWithOutput(PipelineStepContext context, string command, CancellationToken cancellationToken)
     {
-        Console.WriteLine($"[DEBUG] Executing SSH command: {command}");
+        context.Logger.LogDebug("Executing SSH command: {Command}", command);
 
         var startTime = DateTime.UtcNow;
 
@@ -706,11 +904,11 @@ internal class DockerSSHPipeline : IAsyncDisposable
 
             var endTime = DateTime.UtcNow;
             var exitCode = sshCommand.ExitStatus ?? -1;
-            Console.WriteLine($"[DEBUG] SSH command completed in {(endTime - startTime).TotalSeconds:F1}s, exit code: {exitCode}");
+            context.Logger.LogDebug("SSH command completed in {Duration:F1}s, exit code: {ExitCode}", (endTime - startTime).TotalSeconds, exitCode);
 
             if (exitCode != 0)
             {
-                Console.WriteLine($"[DEBUG] SSH error output: {sshCommand.Error}");
+                context.Logger.LogDebug("SSH error output: {Error}", sshCommand.Error);
             }
 
             return (exitCode, result, sshCommand.Error ?? "");
@@ -718,34 +916,33 @@ internal class DockerSSHPipeline : IAsyncDisposable
         catch (Exception ex)
         {
             var endTime = DateTime.UtcNow;
-            Console.WriteLine($"[DEBUG] SSH command failed in {(endTime - startTime).TotalSeconds:F1}s: {ex.Message}");
+            context.Logger.LogDebug("SSH command failed in {Duration:F1}s: {Message}", (endTime - startTime).TotalSeconds, ex.Message);
             return (-1, "", ex.Message);
         }
     }
 
-    private async Task EstablishAndTestSSHConnection(string host, string username, string? password, string? keyPath, string port, IPublishingStep step, CancellationToken cancellationToken)
+    private async Task EstablishAndTestSSHConnection(PipelineStepContext context, string host, string username, string? password, string? keyPath, string port, IReportingStep step, CancellationToken cancellationToken)
     {
-        Console.WriteLine("[DEBUG] Establishing SSH connection using SSH.NET");
+        context.Logger.LogDebug("Establishing SSH connection using SSH.NET");
 
         // Task 1: Establish SSH connection
         await using var connectTask = await step.CreateTaskAsync("Establishing SSH connection", cancellationToken);
 
         try
         {
-            await connectTask.UpdateAsync("Creating SSH and SCP connections...", cancellationToken);
+            context.Logger.LogDebug("Creating SSH and SCP connections...");
 
             var connectionInfo = SSHUtility.CreateConnectionInfo(host, username, password, keyPath, port);
             _sshClient = await SSHUtility.CreateSSHClient(connectionInfo, cancellationToken);
             _scpClient = await SSHUtility.CreateSCPClient(connectionInfo, cancellationToken);
 
-            Console.WriteLine("[DEBUG] SSH and SCP connections established successfully");
+            context.Logger.LogDebug("SSH and SCP connections established successfully");
             await connectTask.SucceedAsync("SSH and SCP connections established", cancellationToken: cancellationToken);
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[DEBUG] Failed to establish SSH connection: {ex.Message}");
-            await connectTask.FailAsync($"Failed to establish SSH connection: {ex.Message}", cancellationToken);
-            await CleanupSSHConnection();
+            context.Logger.LogDebug("Failed to establish SSH connection: {Message}", ex.Message);
+            await CleanupSSHConnection(context);
             throw;
         }
 
@@ -754,11 +951,10 @@ internal class DockerSSHPipeline : IAsyncDisposable
 
         // First test basic connectivity
         var testCommand = "echo 'SSH connection successful'";
-        var result = await ExecuteSSHCommandWithOutput(testCommand, cancellationToken);
+        var result = await ExecuteSSHCommandWithOutput(context, testCommand, cancellationToken);
 
         if (result.ExitCode != 0)
         {
-            await testTask.FailAsync($"SSH connection test failed: {result.Error}\nCommand: {testCommand}\nOutput: {result.Output}", cancellationToken);
             throw new InvalidOperationException($"SSH connection test failed: {result.Error}");
         }
 
@@ -769,18 +965,17 @@ internal class DockerSSHPipeline : IAsyncDisposable
 
         // Test if we can get basic system information
         var infoCommand = "whoami && pwd && ls -la";
-        var infoResult = await ExecuteSSHCommandWithOutput(infoCommand, cancellationToken);
+        var infoResult = await ExecuteSSHCommandWithOutput(context, infoCommand, cancellationToken);
 
         if (infoResult.ExitCode != 0)
         {
-            await verifyTask.FailAsync($"SSH system info check failed: {infoResult.Error}\nCommand: {infoCommand}\nOutput: {infoResult.Output}", cancellationToken);
             throw new InvalidOperationException($"SSH system info check failed: {infoResult.Error}");
         }
 
-        await verifyTask.SucceedAsync($"Remote system access verified\nCommand: {infoCommand}\nSystem info: {infoResult.Output.Trim()}", cancellationToken: cancellationToken);
+        await verifyTask.SucceedAsync($"Remote system access verified", cancellationToken: cancellationToken);
     }
 
-    private async Task CleanupSSHConnection()
+    private async Task CleanupSSHConnection(PipelineStepContext context)
     {
         try
         {
@@ -792,7 +987,7 @@ internal class DockerSSHPipeline : IAsyncDisposable
                 }
                 _sshClient.Dispose();
                 _sshClient = null;
-                Console.WriteLine("[DEBUG] SSH client connection cleaned up");
+                context.Logger.LogDebug("SSH client connection cleaned up");
             }
 
             if (_scpClient != null)
@@ -803,326 +998,176 @@ internal class DockerSSHPipeline : IAsyncDisposable
                 }
                 _scpClient.Dispose();
                 _scpClient = null;
-                Console.WriteLine("[DEBUG] SCP client connection cleaned up");
+                context.Logger.LogDebug("SCP client connection cleaned up");
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[DEBUG] Error cleaning up SSH connections: {ex.Message}");
+            context.Logger.LogDebug("Error cleaning up SSH connections: {Message}", ex.Message);
         }
-
-        await Task.CompletedTask;
     }
 
     public async ValueTask DisposeAsync()
     {
-        await CleanupSSHConnection();
-        GC.SuppressFinalize(this);
-    }
-
-    private async Task<Dictionary<string, string>> PushContainerImagesToRegistry(DeployingContext context, IInteractionService interactionService, DockerSSHConfiguration configDefaults, CancellationToken cancellationToken)
-    {
-        var imageTags = new Dictionary<string, string>();
-
-        var registryInputs = new InteractionInput[]
-        {
-            new() {
-                Required = true,
-                InputType = InputType.Text,
-                Label = "Container Registry URL",
-                Value = !string.IsNullOrEmpty(configDefaults.RegistryUrl) ? configDefaults.RegistryUrl : "docker.io"
-            },
-            new() {
-                InputType = InputType.Text,
-                Label = "Image Repository Prefix",
-                Value = configDefaults.RepositoryPrefix
-            },
-            new() {
-                InputType = InputType.Text,
-                Label = "Registry Username",
-                Value = configDefaults.RegistryUsername
-            },
-            new() {
-                InputType = InputType.SecretText,
-                Label = "Registry Password/Token",
-            }
-        };
-
-        var registryResult = await interactionService.PromptInputsAsync(
-            "Container Registry Configuration",
-            "Please provide the container registry details for pushing images.\n",
-            registryInputs,
-            cancellationToken: cancellationToken
-        );
-
-        if (registryResult.Canceled)
-        {
-            throw new InvalidOperationException("Registry configuration was canceled");
-        }
-
-        var registryUrl = registryResult.Data[0].Value ?? throw new InvalidOperationException("Registry URL is required");
-        var repositoryPrefix = registryResult.Data[1].Value?.Trim();
-        var registryUsername = registryResult.Data[2].Value;
-        var registryPassword = registryResult.Data[3].Value;
-
-        // Create the progress step for container image pushing
-        await using var step = await context.ActivityReporter.CreateStepAsync("Push container images to registry", cancellationToken);
-
         try
         {
-            // Task 2: Docker login (only if credentials are provided)
-            if (!string.IsNullOrEmpty(registryUsername) && !string.IsNullOrEmpty(registryPassword))
+            if (_sshClient != null)
             {
-                await using var loginTask = await step.CreateTaskAsync("Authenticating with container registry", cancellationToken);
-
-                try
-                {
-                    var loginResult = await DockerCommandUtility.ExecuteDockerLogin(registryUrl, registryUsername, registryPassword, cancellationToken);
-
-                    if (loginResult.ExitCode != 0)
-                    {
-                        await loginTask.FailAsync($"Docker login failed: {loginResult.Error}\nOutput: {loginResult.Output}", cancellationToken);
-                        throw new InvalidOperationException($"Docker login failed: {loginResult.Error}");
-                    }
-
-                    await loginTask.SucceedAsync($"Successfully authenticated with {registryUrl}", cancellationToken: cancellationToken);
-                }
-                catch (Exception ex) when (ex is not InvalidOperationException)
-                {
-                    await loginTask.FailAsync($"Docker login failed: {ex.Message}", cancellationToken);
-                    throw new InvalidOperationException($"Docker login failed: {ex.Message}", ex);
-                }
-            }
-            else
-            {
-                await using var skipLoginTask = await step.CreateTaskAsync("Skipping registry authentication", cancellationToken);
-                await skipLoginTask.SucceedAsync("No credentials provided - using existing Docker authentication or public registry", cancellationToken: cancellationToken);
+                if (_sshClient.IsConnected) _sshClient.Disconnect();
+                _sshClient.Dispose();
+                _sshClient = null;
             }
 
-            // Generate timestamp-based tag
-            var imageTag = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
-
-            if (string.IsNullOrEmpty(context.OutputPath))
+            if (_scpClient != null)
             {
-                throw new InvalidOperationException("Deployment output path not available");
-            }
-
-            // Task 4: Tag images for registry (one task per tag operation)
-            foreach (var cr in context.Model.GetComputeResources())
-            {
-                // Skip containers that are not Dockerfile builds
-                if (cr.IsContainer() && !cr.HasAnnotationOfType<DockerfileBuildAnnotation>())
-                    continue;
-
-                var serviceName = cr.Name;
-                var imageName = cr.Name;
-
-                await using var tagTask = await step.CreateTaskAsync($"Tagging {serviceName} image", cancellationToken);
-
-                // Construct the target image name
-                var targetImageName = !string.IsNullOrEmpty(repositoryPrefix)
-                    ? $"{registryUrl}/{repositoryPrefix}/{serviceName}:{imageTag}"
-                    : $"{registryUrl}/{serviceName}:{imageTag}";
-
-                // Tag the image
-                var tagResult = await DockerCommandUtility.ExecuteDockerCommand($"tag {imageName} {targetImageName}", cancellationToken);
-
-                if (tagResult.ExitCode != 0)
-                {
-                    await tagTask.FailAsync($"Failed to tag image {imageName}: {tagResult.Error}\nOutput: {tagResult.Output}", cancellationToken);
-                    throw new InvalidOperationException($"Failed to tag image {imageName}: {tagResult.Error}");
-                }
-
-                imageTags[serviceName] = targetImageName;
-                await tagTask.SucceedAsync($"Successfully tagged {serviceName} image: {targetImageName}", cancellationToken: cancellationToken);
-            }
-
-
-            static async Task PushContainerImageAsync(IPublishingStep step, string serviceName, string targetImageName, CancellationToken cancellationToken)
-            {
-                await using var pushTask = await step.CreateTaskAsync($"Pushing {serviceName} image", cancellationToken);
-
-                var pushResult = await DockerCommandUtility.ExecuteDockerCommand($"push {targetImageName}", cancellationToken);
-
-                if (pushResult.ExitCode != 0)
-                {
-                    await pushTask.FailAsync($"Failed to push image {targetImageName}: {pushResult.Error}\nOutput: {pushResult.Output}", cancellationToken);
-                    throw new InvalidOperationException($"Failed to push image {targetImageName}: {pushResult.Error}");
-                }
-
-                await pushTask.SucceedAsync($"Successfully pushed {serviceName} image: {targetImageName}", cancellationToken: cancellationToken);
-            }
-
-            // Task 4: Push images to registry (one task per image)
-            var tasks = new List<Task>();
-            foreach (var (serviceName, targetImageName) in imageTags)
-            {
-                tasks.Add(PushContainerImageAsync(step, serviceName, targetImageName, cancellationToken));
-            }
-
-            await Task.WhenAll(tasks);
-
-            await step.SucceedAsync("Container images pushed successfully.");
-            return imageTags;
-        }
-        catch (Exception ex)
-        {
-            await step.FailAsync($"Failed to push container images: {ex.Message}");
-            throw;
-        }
-    }
-
-    private async Task MergeAndUpdateEnvironmentFile(string remoteDeployPath, Dictionary<string, string> imageTags, DeployingContext context, IInteractionService interactionService, CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrEmpty(context.OutputPath))
-        {
-            return; // No local environment to work with
-        }
-
-        var localEnvPath = Path.Combine(context.OutputPath, ".env");
-        if (!File.Exists(localEnvPath))
-        {
-            return; // No local .env file to merge
-        }
-
-        // Step 1: Read local environment file
-        var localEnvVars = await EnvironmentFileUtility.ReadEnvironmentFile(localEnvPath);
-
-        // Step 2: Get remote environment file (if it exists)
-        var remoteEnvVars = new Dictionary<string, string>();
-        var remoteEnvPath = $"{remoteDeployPath}/.env";
-
-        try
-        {
-            var remoteEnvResult = await ExecuteSSHCommandWithOutput($"cat '{remoteEnvPath}' 2>/dev/null || echo 'FILE_NOT_FOUND'", cancellationToken);
-            if (remoteEnvResult.ExitCode == 0 && !remoteEnvResult.Output.Contains("FILE_NOT_FOUND"))
-            {
-                remoteEnvVars = EnvironmentFileUtility.ParseEnvironmentContent(remoteEnvResult.Output);
+                if (_scpClient.IsConnected) _scpClient.Disconnect();
+                _scpClient.Dispose();
+                _scpClient = null;
             }
         }
         catch
         {
-            // Remote env file doesn't exist or can't be read - continue with empty remote vars
+            // Suppress exceptions during disposal
         }
 
-        // Step 3: Merge environment variables
-        var mergedEnvVars = new Dictionary<string, string>(remoteEnvVars, StringComparer.OrdinalIgnoreCase);
+        GC.SuppressFinalize(this);
+    }
 
-        // Update with image tags for each service
-        foreach (var (serviceName, imageTag) in imageTags)
+    private async Task<Dictionary<string, string>> PushContainerImagesToRegistry(PipelineStepContext context, RegistryConfiguration registryConfig, CancellationToken cancellationToken)
+    {
+        var imageTags = new Dictionary<string, string>();
+        var registryUrl = registryConfig.RegistryUrl;
+        var repositoryPrefix = registryConfig.RepositoryPrefix;
+
+        // Create the progress step for container image pushing
+        var step = context.ReportingStep;
+
+        // Read the .env.Production file to find all built images
+        var envProductionPath = Path.Combine(OutputPath, ".env.Production");
+        if (!File.Exists(envProductionPath))
+        {
+            throw new InvalidOperationException($".env.Production file not found at {envProductionPath}. Ensure prepare-{DockerComposeEnvironment.Name} step has run.");
+        }
+
+        var envVars = await EnvironmentFileUtility.ReadEnvironmentFile(envProductionPath);
+
+        // Find all *_IMAGE variables
+        var imageVars = envVars.Where(kvp => kvp.Key.EndsWith("_IMAGE", StringComparison.OrdinalIgnoreCase)).ToList();
+
+        if (imageVars.Count == 0)
+        {
+            await step.WarnAsync("No container images found in .env.Production file to push.");
+            return imageTags;
+        }
+
+        // Generate timestamp-based tag
+        var imageTag = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
+
+        // Tag images for registry (one task per tag operation)
+        foreach (var (envKey, localImageName) in imageVars)
+        {
+            // Extract service name from env key (e.g., "APISERVICE_IMAGE" -> "apiservice")
+            var serviceName = envKey.Substring(0, envKey.Length - "_IMAGE".Length).ToLowerInvariant();
+
+            await using var tagTask = await step.CreateTaskAsync($"Tagging {serviceName} image", cancellationToken);
+
+            // Construct the target image name
+            var targetImageName = !string.IsNullOrEmpty(repositoryPrefix)
+                ? $"{registryUrl}/{repositoryPrefix}/{serviceName}:{imageTag}"
+                : $"{registryUrl}/{serviceName}:{imageTag}";
+
+            // Tag the image
+            var tagResult = await DockerCommandUtility.ExecuteDockerCommand($"tag {localImageName} {targetImageName}", cancellationToken);
+
+            if (tagResult.ExitCode != 0)
+            {
+                throw new InvalidOperationException($"Failed to tag image {localImageName}: {tagResult.Error}");
+            }
+
+            imageTags[serviceName] = targetImageName;
+            await tagTask.SucceedAsync($"Successfully tagged {serviceName} image: {targetImageName}", cancellationToken: cancellationToken);
+        }
+
+
+        static async Task PushContainerImageAsync(IReportingStep step, string serviceName, string targetImageName, CancellationToken cancellationToken)
+        {
+            await using var pushTask = await step.CreateTaskAsync($"Pushing {serviceName} image", cancellationToken);
+
+            var pushResult = await DockerCommandUtility.ExecuteDockerCommand($"push {targetImageName}", cancellationToken);
+
+            if (pushResult.ExitCode != 0)
+            {
+                throw new InvalidOperationException($"Failed to push image {targetImageName}: {pushResult.Error}");
+            }
+
+            await pushTask.SucceedAsync($"Successfully pushed {serviceName} image: {targetImageName}", cancellationToken: cancellationToken);
+        }
+
+        // Push images to registry (one task per image)
+        var tasks = new List<Task>();
+        foreach (var (serviceName, targetImageName) in imageTags)
+        {
+            tasks.Add(PushContainerImageAsync(step, serviceName, targetImageName, cancellationToken));
+        }
+
+        await Task.WhenAll(tasks);
+
+        await step.SucceedAsync("Container images pushed successfully.");
+        return imageTags;
+    }
+
+    private async Task MergeAndUpdateEnvironmentFile(string remoteDeployPath, Dictionary<string, string> imageTags, PipelineStepContext context, IInteractionService interactionService, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(OutputPath))
+        {
+            throw new InvalidOperationException("Output path is not set.");
+        }
+
+        // Read the .env.Production file generated by prepare-env step
+        var envProductionPath = Path.Combine(OutputPath, ".env.Production");
+        if (!File.Exists(envProductionPath))
+        {
+            throw new InvalidOperationException($".env.Production file not found at {envProductionPath}. Ensure prepare-{DockerComposeEnvironment.Name} step has run.");
+        }
+
+        // Read environment variables from .env.Production (already filled in by prepare-env)
+        var envVars = await EnvironmentFileUtility.ReadEnvironmentFile(envProductionPath);
+
+        // Update *_IMAGE variables with registry-tagged images
+        foreach (var (serviceName, registryImageTag) in imageTags)
         {
             var imageEnvKey = $"{serviceName.ToUpperInvariant()}_IMAGE";
-            mergedEnvVars[imageEnvKey] = imageTag;
+            envVars[imageEnvKey] = registryImageTag;
         }
 
-        // Add any new variables from local that don't exist in remote
-        foreach (var (key, value) in localEnvVars)
-        {
-            if (!mergedEnvVars.ContainsKey(key))
-            {
-                mergedEnvVars[key] = value;
-            }
-        }
+        var finalEnvVars = envVars.OrderBy(kvp => kvp.Key).ToList();
 
-        // Step 4: Create input prompts for user to review/modify values
-        var envInputs = new List<InteractionInput>();
-        var sortedEnvVars = mergedEnvVars.OrderBy(kvp => kvp.Key).ToList();
-
-        foreach (var (key, value) in sortedEnvVars)
-        {
-            var isImageVar = key.EndsWith("_IMAGE", StringComparison.OrdinalIgnoreCase);
-            var isSensitive = EnvironmentFileUtility.IsSensitiveEnvironmentVariable(key);
-
-            envInputs.Add(new InteractionInput
-            {
-                InputType = isSensitive ? InputType.SecretText : InputType.Text,
-                Label = key,
-                Value = string.IsNullOrEmpty(value) ? null : value,
-                Required = string.IsNullOrEmpty(value) || !isImageVar
-            });
-        }
-
-        if (envInputs.Count == 0)
-        {
-            return; // Nothing to configure
-        }
-
-        // Step 4: Prompt user for environment values
-        var envResult = await interactionService.PromptInputsAsync(
-            "Environment Configuration",
-            """
-            Please review and update the environment variables for deployment.
-            Image variables have been automatically populated from the registry.
-
-            Values from the remote server's .env file have been merged with your local .env file.
-            You can modify any values as needed.
-
-            """,
-            [.. envInputs],
-            cancellationToken: cancellationToken
-        );
-
-        if (envResult.Canceled)
-        {
-            throw new InvalidOperationException("Environment configuration was canceled");
-        }
-
-        // Step 5: Process user input and create final environment file
-        await using var finalizeStep = await context.ActivityReporter.CreateStepAsync("Finalizing environment configuration", cancellationToken);
+        var finalizeStep = context.ReportingStep;
 
         await using var envFileTask = await finalizeStep.CreateTaskAsync("Creating and transferring environment file", cancellationToken);
 
-        try
-        {
-            // Step 5: Prepare final environment content and write to remote
-            var finalEnvVars = new Dictionary<string, string>();
-            for (int i = 0; i < sortedEnvVars.Count; i++)
-            {
-                var key = sortedEnvVars[i].Key;
-                var newValue = envResult.Data[i].Value ?? "";
-                if (!string.IsNullOrEmpty(newValue))
-                {
-                    finalEnvVars[key] = newValue;
-                }
-            }
+        context.Logger.LogDebug("Processed {Count} environment variables", finalEnvVars.Count);
 
-            await envFileTask.UpdateAsync($"Processed {finalEnvVars.Count} environment variables", cancellationToken);
+        // Create environment file content
+        var envContent = string.Join("\n", finalEnvVars.Select(kvp => $"{kvp.Key}={kvp.Value}"));
 
-            // Create environment file content
-            var envContent = string.Join("\n", finalEnvVars.Select(kvp => $"{kvp.Key}={kvp.Value}"));
+        // Write to temporary local file
+        var tempFile = Path.Combine(OutputPath, "remote.env");
+        var remoteEnvPath = $"{remoteDeployPath}/.env";
 
-            // Write to remote environment file
-            var tempFile = Path.GetTempFileName();
-            try
-            {
-                await envFileTask.UpdateAsync("Writing environment file to temporary location...", cancellationToken);
-                await File.WriteAllTextAsync(tempFile, envContent, cancellationToken);
+        context.Logger.LogDebug("Writing environment file to {TempFile}...", tempFile);
+        await File.WriteAllTextAsync(tempFile, envContent, cancellationToken);
 
-                // Ensure the remote directory exists before transferring
-                await envFileTask.UpdateAsync($"Ensuring remote directory exists: {remoteDeployPath}", cancellationToken);
-                await ExecuteSSHCommand($"mkdir -p '{remoteDeployPath}'", cancellationToken);
+        // Ensure the remote directory exists before transferring
+        context.Logger.LogDebug("Ensuring remote directory exists: {RemoteDeployPath}", remoteDeployPath);
+        await ExecuteSSHCommand(context, $"mkdir -p '{remoteDeployPath}'", cancellationToken);
 
-                await envFileTask.UpdateAsync($"Transferring environment file to remote path: {remoteEnvPath}", cancellationToken);
-                await TransferFile(tempFile, remoteEnvPath, cancellationToken);
+        context.Logger.LogDebug("Transferring environment file to remote path: {RemoteEnvPath}", remoteEnvPath);
+        await TransferFile(context, tempFile, remoteEnvPath, cancellationToken);
 
-                await envFileTask.SucceedAsync($"Environment file successfully transferred to {remoteEnvPath}", cancellationToken);
-            }
-            finally
-            {
-                if (File.Exists(tempFile))
-                {
-                    File.Delete(tempFile);
-                }
-            }
+        await envFileTask.SucceedAsync($"Environment file successfully transferred to {remoteEnvPath}", cancellationToken);
 
-            await finalizeStep.SucceedAsync($"Environment configuration finalized with {finalEnvVars.Count} variables");
-        }
-        catch (Exception ex)
-        {
-            await envFileTask.FailAsync($"Failed to create or transfer environment file: {ex.Message}", cancellationToken);
-            await finalizeStep.FailAsync($"Environment configuration failed: {ex.Message}");
-            throw;
-        }
+        await finalizeStep.SucceedAsync($"Environment configuration finalized with {finalEnvVars.Count} variables");
     }
 
     private static string ExpandRemotePath(string path)
@@ -1146,4 +1191,6 @@ internal class DockerSSHPipeline : IAsyncDisposable
         public required string SshPort { get; set; }
         public required string RemoteDeployPath { get; set; }
     }
+
+    internal sealed record RegistryConfiguration(string RegistryUrl, string? RepositoryPrefix, string? RegistryUsername, string? RegistryPassword);
 }

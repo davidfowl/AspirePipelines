@@ -61,8 +61,11 @@ Sample implementation showcasing configurable deployment pipelines that can be s
 ## Features
 
 - SSH-based Docker deployment to remote hosts
+- Container registry integration (Docker Hub, GitHub Container Registry, etc.)
+- Automatic image tagging with timestamps
 - Interactive configuration prompts
 - Integration with appsettings.json and environment variables
+- Built-in Aspire dashboard deployment with automatic token extraction
 - Configurable deployment paths and Docker registries
 
 ## Configuration
@@ -125,26 +128,51 @@ The remote deployment host must have:
 - **Docker installed and running**
 - **SSH server configured and accessible**
 - **User account with Docker permissions** (user should be in the `docker` group)
-- **Network connectivity** for downloading Docker images (if not transferred locally)
+- **Network connectivity** for pulling Docker images from the container registry
+- **Access to the configured container registry** (Docker Hub, GitHub Container Registry, etc.)
 
 ## How It Works
 
 ### Deployment Process
 
+The deployment pipeline executes the following steps:
+
 1. **Configuration Resolution**: Reads deployment settings from configuration sources and prompts for missing values
-2. **Docker Image Building**: Builds Docker images for all containerized projects in the Aspire application
-3. **Image Transfer**: Transfers Docker images to the remote host via SSH
-4. **Container Deployment**: Deploys and starts containers on the remote host
-5. **Service Coordination**: Ensures proper startup order and inter-service communication
+2. **Build & Prepare**: Builds Docker images for all containerized projects and generates deployment files (docker-compose.yaml, .env files)
+3. **Registry Push**: Tags images with timestamps and pushes them to the configured container registry
+4. **SSH Connection**: Establishes secure SSH connection to the target deployment host
+5. **Environment Preparation**: Verifies Docker installation and prepares deployment directory on remote host
+6. **File Transfer**: Transfers docker-compose.yaml and merged environment file to remote host
+7. **Container Deployment**: Pulls images from registry and starts containers using docker compose
+8. **Dashboard Access**: Extracts and displays Aspire dashboard login token from deployment logs
 
 ### Pipeline Architecture
 
-The SSH deployment pipeline consists of:
+The SSH deployment pipeline consists of multiple coordinated steps:
 
-- **`DockerSSHPipeline`**: Core resource that manages the SSH deployment process
-- **`WithSshDeploySupport`**: Extension method that registers the pipeline with the Aspire application
-- **Configuration providers**: Handle interactive prompts and settings resolution
-- **SSH client**: Manages secure communication with the remote host
+**Setup Steps:**
+- `ssh-prereq-env`: Verifies Docker prerequisites
+- `prepare-ssh-context-env`: Prepares SSH connection context
+- `configure-registry-env`: Configures container registry credentials
+
+**Build & Push Steps:**
+- `prepare-env`: Builds images and generates docker-compose files (built-in Aspire step)
+- `push-images-env`: Tags and pushes images to container registry
+
+**Remote Deployment Steps:**
+- `establish-ssh-env`: Establishes SSH connection to target host
+- `prepare-remote-env`: Verifies Docker installation on remote host
+- `merge-environment-env`: Merges environment files with registry image tags
+- `transfer-files-env`: Transfers docker-compose.yaml and .env to remote host
+- `docker-via-ssh-env`: Deploys containers on remote host
+- `extract-dashboard-token-env`: Extracts Aspire dashboard login token
+- `cleanup-ssh-env`: Closes SSH connections
+
+**Key Components:**
+- **`DockerSSHPipeline`**: Core pipeline implementation
+- **`WithSshDeploySupport`**: Extension method that registers the pipeline
+- **`IInteractionService`**: Handles interactive configuration prompts
+- **SSH.NET**: Secure SSH/SCP communication library
 
 ## Sample Project
 

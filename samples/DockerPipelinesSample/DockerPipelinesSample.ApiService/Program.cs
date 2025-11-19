@@ -35,6 +35,12 @@ app.MapGet("/weatherforecast", () =>
 })
 .WithName("GetWeatherForecast");
 
+app.MapGet("/paramtest", (IConfiguration config) =>
+{
+    var pValue = config["P_ENV"] ?? "Not Set";
+    return Results.Ok(new { P_ENV = pValue });
+});
+
 app.MapDefaultEndpoints();
 
 app.Run();

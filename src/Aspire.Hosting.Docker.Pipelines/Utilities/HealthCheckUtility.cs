@@ -1,6 +1,6 @@
-#pragma warning disable ASPIREPUBLISHERS001 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
+#pragma warning disable ASPIREPIPELINES001
 
-using Aspire.Hosting.Publishing;
+using Aspire.Hosting.Pipelines;
 using Renci.SshNet;
 
 namespace Aspire.Hosting.Docker.Pipelines.Utilities;
@@ -10,7 +10,7 @@ internal static class HealthCheckUtility
     public static async Task CheckServiceHealth(
         string deployPath,
         SshClient sshClient,
-        IPublishingStep step,
+        IReportingStep step,
         CancellationToken cancellationToken,
         TimeSpan? maxWaitTime = null,
         TimeSpan? checkInterval = null)
@@ -28,7 +28,7 @@ internal static class HealthCheckUtility
         }
 
         // Step 2: Create tasks for each service
-        var serviceTasks = new Dictionary<string, IPublishingTask>();
+        var serviceTasks = new Dictionary<string, IReportingTask>();
         var serviceHealthy = new Dictionary<string, bool>();
 
         foreach (var service in initialStatuses)
@@ -127,7 +127,7 @@ internal static class HealthCheckUtility
 
     private static async Task UpdateServiceTaskStatus(
         ServiceStatus service,
-        IPublishingTask serviceTask,
+        IReportingTask serviceTask,
         Dictionary<string, bool> serviceHealthy,
         int elapsedSeconds,
         CancellationToken cancellationToken)
@@ -194,7 +194,7 @@ internal static class HealthCheckUtility
 
     private static async Task FinalizeServiceTaskStatus(
         ServiceStatus service,
-        IPublishingTask serviceTask,
+        IReportingTask serviceTask,
         CancellationToken cancellationToken)
     {
         try

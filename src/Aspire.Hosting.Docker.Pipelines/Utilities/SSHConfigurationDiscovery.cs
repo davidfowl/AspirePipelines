@@ -1,7 +1,8 @@
-#pragma warning disable ASPIREPUBLISHERS001 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
+#pragma warning disable ASPIREPIPELINES001
 
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Docker.Pipelines.Models;
+using Aspire.Hosting.Pipelines;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
@@ -9,7 +10,7 @@ namespace Aspire.Hosting.Docker.Pipelines.Utilities;
 
 internal static class SSHConfigurationDiscovery
 {
-    public static Task<SSHConfiguration> DiscoverSSHConfiguration(DeployingContext context)
+    public static Task<SSHConfiguration> DiscoverSSHConfiguration(PipelineStepContext context)
     {
         // Get the application name from the host environment
         var appName = context.Services.GetRequiredService<IHostEnvironment>().ApplicationName.ToLowerInvariant();

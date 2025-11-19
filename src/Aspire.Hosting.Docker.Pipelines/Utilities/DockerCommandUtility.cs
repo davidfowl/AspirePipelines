@@ -1,6 +1,6 @@
-#pragma warning disable ASPIREPUBLISHERS001 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
+#pragma warning disable ASPIREPIPELINES001 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
 
-using Aspire.Hosting.Publishing;
+using Aspire.Hosting.Pipelines;
 using System.Diagnostics;
 
 namespace Aspire.Hosting.Docker.Pipelines.Utilities;
@@ -143,7 +143,7 @@ public static class DockerCommandUtility
         }
     }
 
-    public static async Task CheckDockerAvailability(IPublishingStep step, CancellationToken cancellationToken)
+    public static async Task CheckDockerAvailability(IReportingStep step, CancellationToken cancellationToken)
     {
         await using var task = await step.CreateTaskAsync("Checking Docker availability", cancellationToken);
 
@@ -156,7 +156,6 @@ public static class DockerCommandUtility
 
             if (versionResult.ExitCode != 0)
             {
-                await task.FailAsync("Docker is not installed or not in PATH", cancellationToken);
                 throw new InvalidOperationException("Docker is required for this deployment");
             }
 
@@ -173,18 +172,16 @@ public static class DockerCommandUtility
             }
             else
             {
-                await task.FailAsync("Docker daemon is not running or not accessible", cancellationToken);
                 throw new InvalidOperationException("Docker daemon must be running for this deployment");
             }
         }
         catch (Exception ex) when (ex is not InvalidOperationException)
         {
-            await task.FailAsync($"Docker check failed: {ex.Message}", cancellationToken);
             throw new InvalidOperationException("Docker is required for this deployment", ex);
         }
     }
 
-    public static async Task CheckDockerCompose(IPublishingStep step, CancellationToken cancellationToken)
+    public static async Task CheckDockerCompose(IReportingStep step, CancellationToken cancellationToken)
     {
         await using var task = await step.CreateTaskAsync("Checking Docker Compose availability", cancellationToken);
 
@@ -210,14 +207,12 @@ public static class DockerCommandUtility
                 }
                 else
                 {
-                    await task.FailAsync("Docker Compose is not available (neither 'docker compose' nor 'docker-compose')", cancellationToken);
                     throw new InvalidOperationException("Docker Compose is required for this deployment");
                 }
             }
         }
         catch (Exception ex)
         {
-            await task.FailAsync($"Docker Compose check failed: {ex.Message}", cancellationToken);
             throw new InvalidOperationException("Docker Compose is required for this deployment", ex);
         }
     }
