@@ -13,8 +13,16 @@ using Aspire.Hosting.Docker.Pipelines.Models;
 using Aspire.Hosting.Pipelines;
 using Aspire.Hosting.Docker;
 
-internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeEnvironmentResource) : IAsyncDisposable
+internal class DockerSSHPipeline(
+    DockerComposeEnvironmentResource dockerComposeEnvironmentResource,
+    DockerCommandExecutor dockerCommandExecutor,
+    EnvironmentFileReader environmentFileReader,
+    SSHConfigurationDiscovery sshConfigurationDiscovery) : IAsyncDisposable
 {
+    private readonly DockerCommandExecutor _dockerCommandExecutor = dockerCommandExecutor;
+    private readonly EnvironmentFileReader _environmentFileReader = environmentFileReader;
+    private readonly SSHConfigurationDiscovery _sshConfigurationDiscovery = sshConfigurationDiscovery;
+
     private SshClient? _sshClient = null;
     private ScpClient? _scpClient = null;
 
@@ -199,7 +207,7 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
         if (!string.IsNullOrEmpty(registryUsername) && !string.IsNullOrEmpty(registryPassword))
         {
             await using var loginTask = await step.CreateTaskAsync("Authenticating", context.CancellationToken);
-            var loginResult = await DockerCommandUtility.ExecuteDockerLogin(registryUrl, registryUsername, registryPassword, context.CancellationToken);
+            var loginResult = await _dockerCommandExecutor.ExecuteDockerLogin(registryUrl, registryUsername, registryPassword, context.CancellationToken);
             if (loginResult.ExitCode != 0)
             {
                 throw new InvalidOperationException($"Docker login failed: {loginResult.Error}");
@@ -417,8 +425,8 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
         var step = context.ReportingStep;
 
         // Create all prerequisite check tasks
-        var dockerTask = DockerCommandUtility.CheckDockerAvailability(step, context.CancellationToken);
-        var dockerComposeTask = DockerCommandUtility.CheckDockerCompose(step, context.CancellationToken);
+        var dockerTask = _dockerCommandExecutor.CheckDockerAvailability(step, context.CancellationToken);
+        var dockerComposeTask = _dockerCommandExecutor.CheckDockerCompose(step, context.CancellationToken);
 
         // Run all prerequisite checks concurrently
         await Task.WhenAll(dockerTask, dockerComposeTask);
@@ -622,7 +630,7 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
 
         // Main method logic starts here
         // Discover SSH configuration
-        var sshConfig = await SSHConfigurationDiscovery.DiscoverSSHConfiguration(context);
+        var sshConfig = await _sshConfigurationDiscovery.DiscoverSSHConfiguration(context);
 
         // Build host options for selection
         var hostOptions = BuildHostOptions(configDefaults, sshConfig);
@@ -1054,7 +1062,7 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
             throw new InvalidOperationException($".env.{environmentName} file not found at {envFilePath}. Ensure prepare-{DockerComposeEnvironment.Name} step has run.");
         }
 
-        var envVars = await EnvironmentFileUtility.ReadEnvironmentFile(envFilePath);
+        var envVars = await _environmentFileReader.ReadEnvironmentFile(envFilePath);
 
         // Find all *_IMAGE variables
         var imageVars = envVars.Where(kvp => kvp.Key.EndsWith("_IMAGE", StringComparison.OrdinalIgnoreCase)).ToList();
@@ -1082,7 +1090,7 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
                 : $"{registryUrl}/{serviceName}:{imageTag}";
 
             // Tag the image
-            var tagResult = await DockerCommandUtility.ExecuteDockerCommand($"tag {localImageName} {targetImageName}", cancellationToken);
+            var tagResult = await _dockerCommandExecutor.ExecuteDockerCommand($"tag {localImageName} {targetImageName}", cancellationToken);
 
             if (tagResult.ExitCode != 0)
             {
@@ -1094,11 +1102,11 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
         }
 
 
-        static async Task PushContainerImageAsync(IReportingStep step, string serviceName, string targetImageName, CancellationToken cancellationToken)
+        async Task PushContainerImageAsync(IReportingStep step, string serviceName, string targetImageName, CancellationToken cancellationToken)
         {
             await using var pushTask = await step.CreateTaskAsync($"Pushing {serviceName} image", cancellationToken);
 
-            var pushResult = await DockerCommandUtility.ExecuteDockerCommand($"push {targetImageName}", cancellationToken);
+            var pushResult = await _dockerCommandExecutor.ExecuteDockerCommand($"push {targetImageName}", cancellationToken);
 
             if (pushResult.ExitCode != 0)
             {
@@ -1140,7 +1148,7 @@ internal class DockerSSHPipeline(DockerComposeEnvironmentResource dockerComposeE
         }
 
         // Read environment variables from environment-specific file (already filled in by prepare-env)
-        var envVars = await EnvironmentFileUtility.ReadEnvironmentFile(envFilePath);
+        var envVars = await _environmentFileReader.ReadEnvironmentFile(envFilePath);
 
         // Update *_IMAGE variables with registry-tagged images
         foreach (var (serviceName, registryImageTag) in imageTags)

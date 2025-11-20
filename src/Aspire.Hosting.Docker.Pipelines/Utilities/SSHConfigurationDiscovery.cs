@@ -1,16 +1,27 @@
 #pragma warning disable ASPIREPIPELINES001
 
 using Aspire.Hosting.ApplicationModel;
+using Aspire.Hosting.Docker.Pipelines.Abstractions;
 using Aspire.Hosting.Docker.Pipelines.Models;
 using Aspire.Hosting.Pipelines;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace Aspire.Hosting.Docker.Pipelines.Utilities;
 
-internal static class SSHConfigurationDiscovery
+internal class SSHConfigurationDiscovery
 {
-    public static Task<SSHConfiguration> DiscoverSSHConfiguration(PipelineStepContext context)
+    private readonly IFileSystem _fileSystem;
+    private readonly ILogger<SSHConfigurationDiscovery> _logger;
+
+    public SSHConfigurationDiscovery(IFileSystem fileSystem, ILogger<SSHConfigurationDiscovery> logger)
+    {
+        _fileSystem = fileSystem;
+        _logger = logger;
+    }
+
+    public Task<SSHConfiguration> DiscoverSSHConfiguration(PipelineStepContext context)
     {
         // Get the application name from the host environment
         var appName = context.Services.GetRequiredService<IHostEnvironment>().ApplicationName.ToLowerInvariant();
@@ -18,10 +29,10 @@ internal static class SSHConfigurationDiscovery
         var config = new SSHConfiguration();
 
         // Look for SSH keys and known hosts in common locations
-        var homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        var sshDir = Path.Combine(homeDir, ".ssh");
+        var homeDir = _fileSystem.GetUserProfilePath();
+        var sshDir = _fileSystem.CombinePaths(homeDir, ".ssh");
 
-        if (Directory.Exists(sshDir))
+        if (_fileSystem.DirectoryExists(sshDir))
         {
             // Discover all SSH keys in the .ssh directory
             var commonKeyFiles = new[] { "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa" };
@@ -30,18 +41,18 @@ internal static class SSHConfigurationDiscovery
             var orderedKeyFiles = new List<string>();
             foreach (var commonKey in commonKeyFiles)
             {
-                var keyPath = Path.Combine(sshDir, commonKey);
-                if (File.Exists(keyPath))
+                var keyPath = _fileSystem.CombinePaths(sshDir, commonKey);
+                if (_fileSystem.FileExists(keyPath))
                 {
                     orderedKeyFiles.Add(keyPath);
                 }
             }
 
             // Then add any other SSH-like keys that aren't in the common list
-            var otherKeyFiles = Directory.GetFiles(sshDir, "*", SearchOption.TopDirectoryOnly)
-                .Where(f => !Path.GetFileName(f).EndsWith(".pub") && !Path.GetFileName(f).EndsWith(".ppk"))
-                .Where(f => !commonKeyFiles.Contains(Path.GetFileName(f)) && SSHUtility.IsLikelySSHKey(f))
-                .OrderBy(f => Path.GetFileName(f))
+            var otherKeyFiles = _fileSystem.GetFiles(sshDir, "*", SearchOption.TopDirectoryOnly)
+                .Where(f => !_fileSystem.GetFileName(f).EndsWith(".pub") && !_fileSystem.GetFileName(f).EndsWith(".ppk"))
+                .Where(f => !commonKeyFiles.Contains(_fileSystem.GetFileName(f)) && SSHUtility.IsLikelySSHKey(f))
+                .OrderBy(f => _fileSystem.GetFileName(f))
                 .ToList();
 
             orderedKeyFiles.AddRange(otherKeyFiles);
@@ -51,7 +62,7 @@ internal static class SSHConfigurationDiscovery
                 try
                 {
                     // Just add the path if the file exists and is readable
-                    if (File.Exists(keyPath))
+                    if (_fileSystem.FileExists(keyPath))
                     {
                         config.AvailableKeyPaths.Add(keyPath);
                     }
@@ -70,8 +81,8 @@ internal static class SSHConfigurationDiscovery
             }
 
             // Discover known hosts from SSH known_hosts file
-            var knownHostsPath = Path.Combine(sshDir, "known_hosts");
-            if (File.Exists(knownHostsPath))
+            var knownHostsPath = _fileSystem.CombinePaths(sshDir, "known_hosts");
+            if (_fileSystem.FileExists(knownHostsPath))
             {
                 ParseKnownHostsFile(knownHostsPath, config.KnownHosts);
             }
@@ -81,11 +92,11 @@ internal static class SSHConfigurationDiscovery
         return Task.FromResult(config);
     }
 
-    private static void ParseKnownHostsFile(string filePath, List<string> knownHosts)
+    private void ParseKnownHostsFile(string filePath, List<string> knownHosts)
     {
         try
         {
-            var lines = File.ReadAllLines(filePath);
+            var lines = _fileSystem.ReadAllLines(filePath);
             var hostSet = new HashSet<string>();
 
             foreach (var line in lines)
@@ -137,7 +148,7 @@ internal static class SSHConfigurationDiscovery
         catch (Exception ex)
         {
             // Log error but don't fail the entire discovery process
-            Console.WriteLine($"Warning: Could not parse known_hosts file: {ex.Message}");
+            _logger.LogWarning(ex, "Could not parse known_hosts file");
         }
     }
 }

@@ -1,27 +1,39 @@
+using Aspire.Hosting.Docker.Pipelines.Abstractions;
+using Microsoft.Extensions.Logging;
+
 namespace Aspire.Hosting.Docker.Pipelines.Utilities;
 
-public static class EnvironmentFileUtility
+public class EnvironmentFileReader
 {
-    public static async Task<Dictionary<string, string>> ReadEnvironmentFile(string filePath)
+    private readonly IFileSystem _fileSystem;
+    private readonly ILogger<EnvironmentFileReader> _logger;
+
+    public EnvironmentFileReader(IFileSystem fileSystem, ILogger<EnvironmentFileReader> logger)
     {
-        if (!File.Exists(filePath))
+        _fileSystem = fileSystem;
+        _logger = logger;
+    }
+
+    public async Task<Dictionary<string, string>> ReadEnvironmentFile(string filePath)
+    {
+        if (!_fileSystem.FileExists(filePath))
         {
             return [];
         }
 
         try
         {
-            var content = await File.ReadAllTextAsync(filePath);
+            var content = await _fileSystem.ReadAllTextAsync(filePath);
             return ParseEnvironmentContent(content);
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Warning: Could not read environment file {filePath}: {ex.Message}");
+            _logger.LogWarning(ex, "Could not read environment file {FilePath}", filePath);
             return [];
         }
     }
 
-    public static Dictionary<string, string> ParseEnvironmentContent(string content)
+    public Dictionary<string, string> ParseEnvironmentContent(string content)
     {
         var variables = new Dictionary<string, string>();
 
@@ -63,7 +75,7 @@ public static class EnvironmentFileUtility
         return variables;
     }
 
-    public static bool IsSensitiveEnvironmentVariable(string key)
+    public bool IsSensitiveEnvironmentVariable(string key)
     {
         var sensitiveKeywords = new[]
         {
