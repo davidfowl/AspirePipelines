@@ -50,41 +50,38 @@ internal class SSHConnectionManager : ISSHConnectionManager
             _sshClient = await CreateSSHClientAsync(connectionInfo, cancellationToken);
             _scpClient = await CreateSCPClientAsync(connectionInfo, cancellationToken);
 
-            _logger.LogDebug("SSH and SCP connections established successfully");
-            await connectTask.SucceedAsync("SSH and SCP connections established", cancellationToken: cancellationToken);
+            _logger.LogDebug("SSH and SCP connections established");
+
+            // Test basic SSH connectivity
+            _logger.LogDebug("Testing SSH connectivity...");
+            var testCommand = "echo 'SSH connection successful'";
+            var result = await ExecuteCommandWithOutputAsync(testCommand, cancellationToken);
+
+            if (result.ExitCode != 0)
+            {
+                throw new InvalidOperationException($"SSH connection test failed: {result.Error}");
+            }
+            _logger.LogDebug("SSH connectivity test passed: {Output}", result.Output?.Trim());
+
+            // Verify remote system access
+            _logger.LogDebug("Verifying remote system access...");
+            var infoCommand = "whoami && pwd && ls -la";
+            var infoResult = await ExecuteCommandWithOutputAsync(infoCommand, cancellationToken);
+
+            if (infoResult.ExitCode != 0)
+            {
+                throw new InvalidOperationException($"SSH system info check failed: {infoResult.Error}");
+            }
+            _logger.LogDebug("Remote system access verified");
+
+            await connectTask.SucceedAsync("SSH connection established and tested successfully", cancellationToken: cancellationToken);
         }
         catch (Exception ex)
         {
-            _logger.LogDebug("Failed to establish SSH connection: {Message}", ex.Message);
+            _logger.LogError(ex, "Failed to establish SSH connection");
             await DisconnectAsync();
             throw;
         }
-
-        // Task 2: Test basic SSH connectivity
-        await using var testTask = await step.CreateTaskAsync("Testing SSH connectivity", cancellationToken);
-
-        var testCommand = "echo 'SSH connection successful'";
-        var result = await ExecuteCommandWithOutputAsync(testCommand, cancellationToken);
-
-        if (result.ExitCode != 0)
-        {
-            throw new InvalidOperationException($"SSH connection test failed: {result.Error}");
-        }
-
-        await testTask.SucceedAsync($"Connection tested successfully\nCommand: {testCommand}\nOutput: {result.Output}", cancellationToken: cancellationToken);
-
-        // Task 3: Verify remote system access
-        await using var verifyTask = await step.CreateTaskAsync("Verifying remote system access", cancellationToken);
-
-        var infoCommand = "whoami && pwd && ls -la";
-        var infoResult = await ExecuteCommandWithOutputAsync(infoCommand, cancellationToken);
-
-        if (infoResult.ExitCode != 0)
-        {
-            throw new InvalidOperationException($"SSH system info check failed: {infoResult.Error}");
-        }
-
-        await verifyTask.SucceedAsync($"Remote system access verified", cancellationToken: cancellationToken);
     }
 
     public async Task<int> ExecuteCommandAsync(string command, CancellationToken cancellationToken)

@@ -67,36 +67,41 @@ internal static class HealthCheckUtility
         }
 
         var totalElapsed = DateTime.UtcNow - startTime;
-        logger.LogInformation("Health check completed after {Elapsed:F1}s ({PollCount} polls)",
-            totalElapsed.TotalSeconds, pollCount);
 
-        // Step 3: Create tasks and report final status for each service
-        var reportTasks = new List<Task>();
-
+        // Step 3: Report final status for each service
+        var hasAnyFailures = false;
         foreach (var service in finalStatuses)
         {
-            reportTasks.Add(ReportServiceStatusAsync(service, step, cancellationToken));
+            ReportServiceStatus(service, logger, out var hasFailure);
+            hasAnyFailures = hasAnyFailures || hasFailure;
         }
 
-        await Task.WhenAll(reportTasks);
+        logger.LogInformation("Health check completed after {Elapsed:F1}s ({PollCount} polls)", totalElapsed.TotalSeconds, pollCount);
+
+        // Throw if any services failed
+        if (hasAnyFailures)
+        {
+            throw new InvalidOperationException("One or more services failed health checks");
+        }
     }
 
-    private static async Task ReportServiceStatusAsync(
+    private static void ReportServiceStatus(
         ServiceStatus service,
-        IReportingStep step,
-        CancellationToken cancellationToken)
+        ILogger logger,
+        out bool hasFailure)
     {
-        await using var serviceTask = await step.CreateTaskAsync($"Health check: {service.Name}", cancellationToken);
+        hasFailure = false;
 
         try
         {
             if (service.IsHealthy)
             {
-                // Service is healthy
-                await serviceTask.SucceedAsync(
-                    $"Service {service.Name} is healthy - Status: {service.Status}" +
-                    (string.IsNullOrEmpty(service.Ports) ? "" : $", Ports: {service.Ports}"),
-                    cancellationToken: cancellationToken);
+                // Service is healthy - log at debug level
+                logger.LogDebug(
+                    "Service {ServiceName} is healthy - Status: {Status}{Ports}",
+                    service.Name,
+                    service.Status,
+                    string.IsNullOrEmpty(service.Ports) ? "" : $", Ports: {service.Ports}");
             }
             else if (IsStatusTerminal(service.Status))
             {
@@ -106,30 +111,25 @@ internal static class HealthCheckUtility
 
                 if (isSuccessfulExit)
                 {
-                    await serviceTask.SucceedAsync(
-                        $"Service {service.Name} completed successfully - Status: {service.Status}",
-                        cancellationToken: cancellationToken);
+                    logger.LogDebug("Service {ServiceName} completed successfully - Status: {Status}", service.Name, service.Status);
                 }
                 else
                 {
-                    await serviceTask.FailAsync(
-                        $"Service {service.Name} terminated unexpectedly - Status: {service.Status}, Details: {service.Details}",
-                        cancellationToken);
+                    logger.LogError("Service {ServiceName} terminated unexpectedly - Status: {Status}, Details: {Details}", service.Name, service.Status, service.Details);
+                    hasFailure = true;
                 }
             }
             else
             {
                 // Service failed to become healthy within timeout
-                await serviceTask.FailAsync(
-                    $"Service {service.Name} failed to become healthy - Status: {service.Status}, Details: {service.Details}",
-                    cancellationToken);
+                logger.LogError("Service {ServiceName} failed to become healthy - Status: {Status}, Details: {Details}", service.Name, service.Status, service.Details);
+                hasFailure = true;
             }
         }
         catch (Exception ex)
         {
-            await serviceTask.FailAsync(
-                $"Failed to check status for service {service.Name}: {ex.Message}",
-                cancellationToken);
+            logger.LogError(ex, "Failed to check status for service {ServiceName}", service.Name);
+            hasFailure = true;
         }
     }
 

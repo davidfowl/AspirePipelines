@@ -81,7 +81,7 @@ internal class DockerSSHPipeline(
         var transferFiles = new PipelineStep { Name = $"transfer-files-{DockerComposeEnvironment.Name}", Action = TransferDeploymentFilesPipelineStep };
         transferFiles.DependsOn(mergeEnv);
 
-        var deploy = new PipelineStep { Name = $"docker-via-ssh-{DockerComposeEnvironment.Name}", Action = DeployApplicationStep };
+        var deploy = new PipelineStep { Name = $"remote-docker-deploy-{DockerComposeEnvironment.Name}", Action = DeployApplicationStep };
         deploy.DependsOn(transferFiles);
 
         // Post-deploy: Extract dashboard login token from logs
@@ -141,7 +141,7 @@ internal class DockerSSHPipeline(
             _environmentFileReader,
             _loggerFactory);
 
-        await step.SucceedAsync("SSH connection established and tested successfully");
+        // Note: Success message already reported by SSHConnectionManager
     }
 
     private async Task ConfigureDeploymentStep(PipelineStepContext context)
@@ -241,7 +241,13 @@ internal class DockerSSHPipeline(
     {
         var step = context.ReportingStep;
         var deploymentInfo = await DeployOnRemoteServer(context, RemoteDeployPath, ImageTags, step, RemoteOperationsFactory, context.CancellationToken);
-        await step.SucceedAsync($"Application deployed successfully! {deploymentInfo}");
+
+        // Log the detailed service table to information level
+        context.Logger.LogInformation("{DeploymentInfo}", deploymentInfo);
+
+        // Use a simple success message for the task
+        var deploymentStatus = await RemoteOperationsFactory.DeploymentMonitorService.GetStatusAsync(RemoteDeployPath, context.CancellationToken);
+        await step.SucceedAsync($"Application deployed successfully! Services running: {deploymentStatus.HealthyServices} of {deploymentStatus.TotalServices} containers healthy.");
     }
     #endregion
 
@@ -290,19 +296,18 @@ internal class DockerSSHPipeline(
     private async Task PrepareRemoteEnvironment(PipelineStepContext context, string deployPath, IReportingStep step, RemoteOperationsFactory factory, CancellationToken cancellationToken)
     {
         // Prepare deployment directory
-        await using var createDirTask = await step.CreateTaskAsync("Creating deployment directory", cancellationToken);
+        context.Logger.LogDebug("Creating deployment directory: {DeployPath}", deployPath);
         var createdPath = await factory.DockerEnvironmentService.PrepareDeploymentDirectoryAsync(deployPath, cancellationToken);
-        await createDirTask.SucceedAsync($"Directory created: {createdPath}", cancellationToken: cancellationToken);
+        context.Logger.LogDebug("Directory created: {CreatedPath}", createdPath);
 
         // Validate Docker environment
-        await using var dockerCheckTask = await step.CreateTaskAsync("Verifying Docker installation", cancellationToken);
+        context.Logger.LogDebug("Verifying Docker installation");
         var dockerInfo = await factory.DockerEnvironmentService.ValidateDockerEnvironmentAsync(cancellationToken);
-        await dockerCheckTask.SucceedAsync(
-            $"Docker {dockerInfo.DockerVersion}, Server {dockerInfo.ServerVersion}, Compose {dockerInfo.ComposeVersion}",
-            cancellationToken: cancellationToken);
+        context.Logger.LogDebug("Docker {DockerVersion}, Server {ServerVersion}, Compose {ComposeVersion}",
+            dockerInfo.DockerVersion, dockerInfo.ServerVersion, dockerInfo.ComposeVersion);
 
         // Check deployment state
-        await using var permissionsTask = await step.CreateTaskAsync("Checking permissions and resources", cancellationToken);
+        context.Logger.LogDebug("Checking permissions and resources");
         var deploymentState = await factory.DockerEnvironmentService.GetDeploymentStateAsync(deployPath, cancellationToken);
 
         if (!dockerInfo.HasPermissions)
@@ -310,9 +315,10 @@ internal class DockerSSHPipeline(
             throw new InvalidOperationException("User does not have permission to run Docker commands. Add user to 'docker' group and restart the session.");
         }
 
-        await permissionsTask.SucceedAsync(
-            $"Permissions and resources validated. Existing containers: {deploymentState.ExistingContainerCount}",
-            cancellationToken: cancellationToken);
+        context.Logger.LogDebug("Permissions and resources validated. Existing containers: {ExistingContainerCount}",
+            deploymentState.ExistingContainerCount);
+
+        await step.SucceedAsync("Remote environment ready for deployment");
     }
 
     private async Task TransferDeploymentFiles(string deployPath, PipelineStepContext context, IReportingStep step, RemoteOperationsFactory factory, CancellationToken cancellationToken)

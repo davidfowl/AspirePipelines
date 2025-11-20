@@ -85,7 +85,6 @@ internal class SSHConnectionFactory
         // Persist SSH context for future runs
         await PersistSSHContextAsync(deploymentStateManager, sshContext, cancellationToken);
 
-        _logger.LogInformation("SSH connection established successfully");
         return manager;
     }
 
