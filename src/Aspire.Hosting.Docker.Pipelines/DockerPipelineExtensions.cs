@@ -1,11 +1,15 @@
+#pragma warning disable ASPIREPIPELINES004
+
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Docker;
 using Aspire.Hosting.Docker.Pipelines.Abstractions;
 using Aspire.Hosting.Docker.Pipelines.Infrastructure;
+using Aspire.Hosting.Docker.Pipelines.Services;
 using Aspire.Hosting.Docker.Pipelines.Utilities;
 using Aspire.Hosting.Pipelines;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 
 namespace Aspire.Hosting;
 
@@ -35,7 +39,7 @@ public static class DockerPipelineExtensions
     public static IResourceBuilder<DockerComposeEnvironmentResource> WithSshDeploySupport(
         this IResourceBuilder<DockerComposeEnvironmentResource> resourceBuilder)
     {
-        // Register infrastructure services
+        // Register infrastructure services (shared across all environments)
         resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<IProcessExecutor, ProcessExecutor>();
         resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<IFileSystem, FileSystemAdapter>();
         resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<DockerCommandExecutor>();
@@ -43,6 +47,7 @@ public static class DockerPipelineExtensions
         resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<SSHConfigurationDiscovery>();
 
         // Register DockerSSHPipeline as a keyed service, keyed on the Docker Compose environment resource
+        // Each pipeline creates its own SSHConnectionManager
         resourceBuilder.ApplicationBuilder.Services.AddKeyedSingleton(
             resourceBuilder.Resource,
             (serviceProvider, key) =>
@@ -50,12 +55,16 @@ public static class DockerPipelineExtensions
                 var dockerCommandExecutor = serviceProvider.GetRequiredService<DockerCommandExecutor>();
                 var environmentFileReader = serviceProvider.GetRequiredService<EnvironmentFileReader>();
                 var sshConfigurationDiscovery = serviceProvider.GetRequiredService<SSHConfigurationDiscovery>();
+                var pipelineOutputService = serviceProvider.GetRequiredService<IPipelineOutputService>();
+                var logger = serviceProvider.GetRequiredService<ILogger<SSHConnectionManager>>();
 
                 return new DockerSSHPipeline(
                     (DockerComposeEnvironmentResource)key,
                     dockerCommandExecutor,
                     environmentFileReader,
-                    sshConfigurationDiscovery);
+                    pipelineOutputService,
+                    sshConfigurationDiscovery,
+                    logger);
             });
 
         return resourceBuilder.WithPipelineStepFactory(context =>

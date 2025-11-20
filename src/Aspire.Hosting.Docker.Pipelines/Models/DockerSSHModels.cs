@@ -27,3 +27,14 @@ public class DockerSSHConfiguration
     public string? RegistryUsername { get; set; }
     public string? RepositoryPrefix { get; set; }
 }
+
+public class SSHConnectionContext
+{
+    // User-selected values
+    public required string TargetHost { get; set; }
+    public required string SshUsername { get; set; }
+    public string? SshPassword { get; set; }
+    public string? SshKeyPath { get; set; }
+    public required string SshPort { get; set; }
+    public required string RemoteDeployPath { get; set; }
+}
