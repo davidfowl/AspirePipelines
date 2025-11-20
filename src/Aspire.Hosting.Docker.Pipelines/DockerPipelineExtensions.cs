@@ -1,11 +1,16 @@
+#pragma warning disable ASPIREPIPELINES004
+
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Docker;
 using Aspire.Hosting.Docker.Pipelines.Abstractions;
 using Aspire.Hosting.Docker.Pipelines.Infrastructure;
-using Aspire.Hosting.Docker.Pipelines.Utilities;
+using Aspire.Hosting.Docker.Pipelines.Services;
 using Aspire.Hosting.Pipelines;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace Aspire.Hosting;
 
@@ -35,28 +40,28 @@ public static class DockerPipelineExtensions
     public static IResourceBuilder<DockerComposeEnvironmentResource> WithSshDeploySupport(
         this IResourceBuilder<DockerComposeEnvironmentResource> resourceBuilder)
     {
-        // Register infrastructure services
+        // Register infrastructure services (shared across all environments)
         resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<IProcessExecutor, ProcessExecutor>();
         resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<IFileSystem, FileSystemAdapter>();
         resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<DockerCommandExecutor>();
         resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<EnvironmentFileReader>();
         resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<SSHConfigurationDiscovery>();
+        resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<SSHConnectionFactory>();
+        resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<DockerRegistryService>();
 
-        // Register DockerSSHPipeline as a keyed service, keyed on the Docker Compose environment resource
+        // Register DockerSSHPipeline as a keyed service (one per resource)
         resourceBuilder.ApplicationBuilder.Services.AddKeyedSingleton(
             resourceBuilder.Resource,
-            (serviceProvider, key) =>
-            {
-                var dockerCommandExecutor = serviceProvider.GetRequiredService<DockerCommandExecutor>();
-                var environmentFileReader = serviceProvider.GetRequiredService<EnvironmentFileReader>();
-                var sshConfigurationDiscovery = serviceProvider.GetRequiredService<SSHConfigurationDiscovery>();
-
-                return new DockerSSHPipeline(
-                    (DockerComposeEnvironmentResource)key,
-                    dockerCommandExecutor,
-                    environmentFileReader,
-                    sshConfigurationDiscovery);
-            });
+            (sp, key) => new DockerSSHPipeline(
+                (DockerComposeEnvironmentResource)key,
+                sp.GetRequiredService<DockerCommandExecutor>(),
+                sp.GetRequiredService<EnvironmentFileReader>(),
+                sp.GetRequiredService<IPipelineOutputService>(),
+                sp.GetRequiredService<SSHConnectionFactory>(),
+                sp.GetRequiredService<DockerRegistryService>(),
+                sp.GetRequiredService<IConfiguration>(),
+                sp.GetRequiredService<IHostEnvironment>(),
+                sp.GetRequiredService<ILoggerFactory>()));
 
         return resourceBuilder.WithPipelineStepFactory(context =>
         {

@@ -1,7 +1,8 @@
 #pragma warning disable ASPIREPIPELINES001
 
+using Aspire.Hosting.Docker.Pipelines.Abstractions;
 using Aspire.Hosting.Pipelines;
-using Renci.SshNet;
+using Microsoft.Extensions.Logging;
 
 namespace Aspire.Hosting.Docker.Pipelines.Utilities;
 
@@ -9,8 +10,9 @@ internal static class HealthCheckUtility
 {
     public static async Task CheckServiceHealth(
         string deployPath,
-        SshClient sshClient,
+        ISSHConnectionManager sshConnectionManager,
         IReportingStep step,
+        ILogger logger,
         CancellationToken cancellationToken,
         TimeSpan? maxWaitTime = null,
         TimeSpan? checkInterval = null)
@@ -18,335 +20,285 @@ internal static class HealthCheckUtility
         var maxWait = maxWaitTime ?? TimeSpan.FromMinutes(5);
         var interval = checkInterval ?? TimeSpan.FromSeconds(10);
 
+        logger.LogDebug("Starting health check for services in {DeployPath}, timeout={MaxWait}", deployPath, maxWait);
+
         // Step 1: Get the initial list of services from remote
-        var initialStatuses = await GetServiceStatuses(deployPath, sshClient, cancellationToken);
-        
+        var initialStatuses = await GetServiceStatuses(deployPath, sshConnectionManager, logger, cancellationToken);
+
         if (initialStatuses.Count == 0)
         {
-            // No services found
+            logger.LogWarning("No services found in {DeployPath}", deployPath);
             return;
         }
 
-        // Step 2: Create tasks for each service
-        var serviceTasks = new Dictionary<string, IReportingTask>();
-        var serviceHealthy = new Dictionary<string, bool>();
+        logger.LogDebug("Monitoring {ServiceCount} services: {Services}",
+            initialStatuses.Count,
+            string.Join(", ", initialStatuses.Select(s => s.Name)));
 
-        foreach (var service in initialStatuses)
-        {
-            var serviceTask = await step.CreateTaskAsync($"Health check: {service.Name}", cancellationToken);
-            serviceTasks[service.Name] = serviceTask;
-            serviceHealthy[service.Name] = false;
-
-            // Initial status update
-            await serviceTask.UpdateAsync($"Starting health check for {service.Name} - Status: {service.Status}", cancellationToken);
-        }
-
-        // Step 3: Poll status and update tasks concurrently
+        // Step 2: Poll status until all services are healthy or timeout
         var startTime = DateTime.UtcNow;
-        
-        try
+        var finalStatuses = initialStatuses;
+        var pollCount = 0;
+
+        while (DateTime.UtcNow - startTime < maxWait)
         {
-            while (DateTime.UtcNow - startTime < maxWait)
+            pollCount++;
+            var elapsed = DateTime.UtcNow - startTime;
+
+            // Get current status of all services
+            finalStatuses = await GetServiceStatuses(deployPath, sshConnectionManager, logger, cancellationToken);
+
+            var healthyCount = finalStatuses.Count(s => s.IsHealthy);
+            var terminalCount = finalStatuses.Count(s => IsStatusTerminal(s.Status));
+
+            logger.LogDebug("Poll #{PollCount} at {Elapsed:F1}s: {HealthyCount}/{TotalCount} healthy, {TerminalCount} terminal",
+                pollCount, elapsed.TotalSeconds, healthyCount, finalStatuses.Count, terminalCount);
+
+            // Check if all services are healthy or in terminal state
+            if (finalStatuses.All(s => s.IsHealthy || IsStatusTerminal(s.Status)))
             {
-                // Get current status of all services (single SSH call)
-                var currentStatuses = await GetServiceStatuses(deployPath, sshClient, cancellationToken);
-                var elapsedSeconds = (int)(DateTime.UtcNow - startTime).TotalSeconds;
-
-                // Create concurrent tasks to update each service status
-                var updateTasks = new List<Task>();
-
-                foreach (var service in currentStatuses)
-                {
-                    if (serviceTasks.TryGetValue(service.Name, out var task) && !serviceHealthy[service.Name])
-                    {
-                        // Create a concurrent task to update this service's status
-                        var updateTask = UpdateServiceTaskStatus(service, task, serviceHealthy, elapsedSeconds, cancellationToken);
-                        updateTasks.Add(updateTask);
-                    }
-                }
-
-                // Wait for all status updates to complete concurrently
-                if (updateTasks.Count > 0)
-                {
-                    await Task.WhenAll(updateTasks);
-                }
-
-                // Check if all services are in a final state (healthy or terminal)
-                if (serviceHealthy.Values.All(isProcessed => isProcessed))
-                {
-                    break;
-                }
-
-                // Wait before next poll
-                await Task.Delay(interval, cancellationToken);
+                logger.LogDebug("All services reached final state after {Elapsed:F1}s ({PollCount} polls)",
+                    elapsed.TotalSeconds, pollCount);
+                break;
             }
 
-            // Final check for any remaining unhealthy services
-            var finalStatuses = await GetServiceStatuses(deployPath, sshClient, cancellationToken);
-            var finalUpdateTasks = new List<Task>();
-
-            foreach (var service in finalStatuses)
-            {
-                if (serviceTasks.TryGetValue(service.Name, out var task) && !serviceHealthy[service.Name])
-                {
-                    var finalUpdateTask = FinalizeServiceTaskStatus(service, task, cancellationToken);
-                    finalUpdateTasks.Add(finalUpdateTask);
-                }
-            }
-
-            if (finalUpdateTasks.Count > 0)
-            {
-                await Task.WhenAll(finalUpdateTasks);
-            }
-        }
-        catch (Exception ex)
-        {
-            // Handle any polling errors by failing remaining unhealthy services
-            var errorTasks = new List<Task>();
-            foreach (var kvp in serviceTasks)
-            {
-                if (!serviceHealthy[kvp.Key])
-                {
-                    var errorTask = kvp.Value.FailAsync(
-                        $"Health check for service {kvp.Key} failed due to polling error: {ex.Message}",
-                        cancellationToken);
-                    errorTasks.Add(errorTask);
-                }
-            }
-
-            if (errorTasks.Count > 0)
-            {
-                await Task.WhenAll(errorTasks);
-            }
+            // Wait before next poll
+            await Task.Delay(interval, cancellationToken);
         }
 
-        // Dispose all tasks
-        var disposeTasks = serviceTasks.Values.Select(task => task.DisposeAsync().AsTask());
-        await Task.WhenAll(disposeTasks);
+        var totalElapsed = DateTime.UtcNow - startTime;
+
+        // Step 3: Report final status for each service
+        var hasAnyFailures = false;
+        foreach (var service in finalStatuses)
+        {
+            ReportServiceStatus(service, logger, out var hasFailure);
+            hasAnyFailures = hasAnyFailures || hasFailure;
+        }
+
+        logger.LogInformation("Health check completed after {Elapsed:F1}s ({PollCount} polls)", totalElapsed.TotalSeconds, pollCount);
+
+        // Throw if any services failed
+        if (hasAnyFailures)
+        {
+            throw new InvalidOperationException("One or more services failed health checks");
+        }
     }
 
-    private static async Task UpdateServiceTaskStatus(
+    private static void ReportServiceStatus(
         ServiceStatus service,
-        IReportingTask serviceTask,
-        Dictionary<string, bool> serviceHealthy,
-        int elapsedSeconds,
-        CancellationToken cancellationToken)
+        ILogger logger,
+        out bool hasFailure)
     {
+        hasFailure = false;
+
         try
         {
             if (service.IsHealthy)
             {
-                // Service became healthy
-                await serviceTask.SucceedAsync(
-                    $"Service {service.Name} is healthy - Status: {service.Status}" + 
-                    (string.IsNullOrEmpty(service.Ports) ? "" : $", Ports: {service.Ports}"),
-                    cancellationToken: cancellationToken);
-                
-                lock (serviceHealthy)
-                {
-                    serviceHealthy[service.Name] = true;
-                }
-            }
-            else if (IsStatusTerminal(service.Status))
-            {
-                // Service reached a terminal state (exited, dead, etc.)
-                var isSuccessfulExit = service.Status.ToLowerInvariant().Contains("exited") && 
-                                     (service.Status.Contains("(0)") || service.Status.Contains("exit 0"));
-
-                if (isSuccessfulExit)
-                {
-                    await serviceTask.SucceedAsync(
-                        $"Service {service.Name} completed successfully - Status: {service.Status}",
-                        cancellationToken: cancellationToken);
-                }
-                else
-                {
-                    await serviceTask.FailAsync(
-                        $"Service {service.Name} terminated unexpectedly - Status: {service.Status}, Details: {service.Details}",
-                        cancellationToken);
-                }
-                
-                lock (serviceHealthy)
-                {
-                    serviceHealthy[service.Name] = true; // Mark as processed since it's in terminal state
-                }
-            }
-            else
-            {
-                // Service still not healthy and not terminal, update status
-                await serviceTask.UpdateAsync(
-                    $"Waiting for {service.Name} to become healthy - Status: {service.Status} (checking for {elapsedSeconds}s)",
-                    cancellationToken);
-            }
-        }
-        catch (Exception ex)
-        {
-            await serviceTask.FailAsync(
-                $"Failed to update status for service {service.Name}: {ex.Message}",
-                cancellationToken);
-            
-            lock (serviceHealthy)
-            {
-                serviceHealthy[service.Name] = true; // Mark as "processed" to avoid further updates
-            }
-        }
-    }
-
-    private static async Task FinalizeServiceTaskStatus(
-        ServiceStatus service,
-        IReportingTask serviceTask,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            if (service.IsHealthy)
-            {
-                await serviceTask.SucceedAsync(
-                    $"Service {service.Name} is healthy - Status: {service.Status}" +
-                    (string.IsNullOrEmpty(service.Ports) ? "" : $", Ports: {service.Ports}"),
-                    cancellationToken: cancellationToken);
+                // Service is healthy - log at debug level
+                logger.LogDebug(
+                    "Service {ServiceName} is healthy - Status: {Status}{Ports}",
+                    service.Name,
+                    service.Status,
+                    string.IsNullOrEmpty(service.Ports) ? "" : $", Ports: {service.Ports}");
             }
             else if (IsStatusTerminal(service.Status))
             {
                 // Service reached a terminal state
-                var isSuccessfulExit = service.Status.ToLowerInvariant().Contains("exited") && 
+                var isSuccessfulExit = service.Status.ToLowerInvariant().Contains("exited") &&
                                      (service.Status.Contains("(0)") || service.Status.Contains("exit 0"));
 
                 if (isSuccessfulExit)
                 {
-                    await serviceTask.SucceedAsync(
-                        $"Service {service.Name} completed successfully - Status: {service.Status}",
-                        cancellationToken: cancellationToken);
+                    logger.LogDebug("Service {ServiceName} completed successfully - Status: {Status}", service.Name, service.Status);
                 }
                 else
                 {
-                    await serviceTask.FailAsync(
-                        $"Service {service.Name} terminated unexpectedly - Status: {service.Status}, Details: {service.Details}",
-                        cancellationToken);
+                    logger.LogError("Service {ServiceName} terminated unexpectedly - Status: {Status}, Details: {Details}", service.Name, service.Status, service.Details);
+                    hasFailure = true;
                 }
             }
             else
             {
-                // Service failed to become healthy or reach terminal state within timeout
-                await serviceTask.FailAsync(
-                    $"Service {service.Name} failed to become healthy within timeout - Status: {service.Status}, Details: {service.Details}",
-                    cancellationToken);
+                // Service failed to become healthy within timeout
+                logger.LogError("Service {ServiceName} failed to become healthy - Status: {Status}, Details: {Details}", service.Name, service.Status, service.Details);
+                hasFailure = true;
             }
         }
         catch (Exception ex)
         {
-            await serviceTask.FailAsync(
-                $"Failed to finalize status for service {service.Name}: {ex.Message}",
-                cancellationToken);
+            logger.LogError(ex, "Failed to check status for service {ServiceName}", service.Name);
+            hasFailure = true;
         }
     }
 
     public static async Task<List<ServiceStatus>> GetServiceStatuses(
         string deployPath,
-        SshClient sshClient,
+        ISSHConnectionManager sshConnectionManager,
+        ILogger logger,
         CancellationToken cancellationToken)
     {
-        var services = new List<ServiceStatus>();
-
         try
         {
-            // Get detailed service information using docker compose ps with format
+            // Try formatted output first
+            logger.LogDebug("Attempting to get service statuses using formatted docker compose ps output");
             var psCommand = $"cd {deployPath} && (docker compose ps --format 'table {{{{.Name}}}}\\t{{{{.Service}}}}\\t{{{{.Status}}}}\\t{{{{.Ports}}}}' || docker-compose ps --format 'table {{{{.Name}}}}\\t{{{{.Service}}}}\\t{{{{.Status}}}}\\t{{{{.Ports}}}}' || true)";
-            
-            using var sshCommand = sshClient.CreateCommand(psCommand);
-            await sshCommand.ExecuteAsync(cancellationToken);
+            var result = await sshConnectionManager.ExecuteCommandWithOutputAsync(psCommand, cancellationToken);
 
-            if (sshCommand.ExitStatus == 0 && !string.IsNullOrEmpty(sshCommand.Result))
+            if (result.ExitCode == 0 && !string.IsNullOrEmpty(result.Output))
             {
-                var lines = sshCommand.Result.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-                
-                // Skip header line if it exists
-                var dataLines = lines.Where(line => 
-                    !line.StartsWith("NAME") && 
-                    !line.StartsWith("Container") && 
-                    !string.IsNullOrWhiteSpace(line)).ToList();
-
-                foreach (var line in dataLines)
+                var services = ParseFormattedDockerPs(result.Output);
+                if (services.Count > 0)
                 {
-                    var parts = line.Split('\t', StringSplitOptions.RemoveEmptyEntries);
-                    if (parts.Length >= 3)
-                    {
-                        var containerName = parts[0].Trim();
-                        var serviceName = parts.Length > 1 ? parts[1].Trim() : containerName;
-                        var status = parts[2].Trim();
-                        var ports = parts.Length > 3 ? parts[3].Trim() : "";
-
-                        services.Add(new ServiceStatus
-                        {
-                            Name = serviceName,
-                            ContainerName = containerName,
-                            Status = status,
-                            Ports = ports,
-                            IsHealthy = IsStatusHealthy(status),
-                            IsTerminal = IsStatusTerminal(status),
-                            Details = $"Container: {containerName}, Status: {status}"
-                        });
-                    }
+                    logger.LogDebug("Successfully parsed {ServiceCount} services from formatted output", services.Count);
+                    return services;
                 }
+                logger.LogDebug("Formatted output returned no services, falling back to basic ps");
+            }
+            else
+            {
+                logger.LogDebug("Formatted docker compose ps failed (exit code {ExitCode}), falling back to basic ps", result.ExitCode);
             }
 
-            // If the formatted approach didn't work, fall back to basic ps command
-            if (services.Count == 0)
+            // Fallback to basic ps command
+            logger.LogDebug("Attempting to get service statuses using basic docker compose ps output");
+            var fallbackCommand = $"cd {deployPath} && (docker compose ps || docker-compose ps || true)";
+            var fallbackResult = await sshConnectionManager.ExecuteCommandWithOutputAsync(fallbackCommand, cancellationToken);
+
+            if (fallbackResult.ExitCode == 0 && !string.IsNullOrEmpty(fallbackResult.Output))
             {
-                var fallbackCommand = $"cd {deployPath} && (docker compose ps || docker-compose ps || true)";
-                using var fallbackSshCommand = sshClient.CreateCommand(fallbackCommand);
-                await fallbackSshCommand.ExecuteAsync(cancellationToken);
-
-                if (fallbackSshCommand.ExitStatus == 0 && !string.IsNullOrEmpty(fallbackSshCommand.Result))
-                {
-                    var lines = fallbackSshCommand.Result.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-                    
-                    foreach (var line in lines)
-                    {
-                        // Skip header lines and empty lines
-                        if (line.Contains("NAME") || line.Contains("Container") || 
-                            line.StartsWith("--") || string.IsNullOrWhiteSpace(line))
-                            continue;
-
-                        // Parse basic format: container_name ... status ... ports
-                        var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                        if (parts.Length >= 2)
-                        {
-                            var containerName = parts[0];
-                            var serviceName = ExtractServiceNameFromContainer(containerName);
-                            var status = ExtractStatusFromLine(line);
-
-                            services.Add(new ServiceStatus
-                            {
-                                Name = serviceName,
-                                ContainerName = containerName,
-                                Status = status,
-                                Ports = ExtractPortsFromLine(line),
-                                IsHealthy = IsStatusHealthy(status),
-                                IsTerminal = IsStatusTerminal(status),
-                                Details = line.Trim()
-                            });
-                        }
-                    }
-                }
+                var services = ParseBasicDockerPs(fallbackResult.Output);
+                logger.LogDebug("Successfully parsed {ServiceCount} services from basic output", services.Count);
+                return services;
             }
+
+            logger.LogWarning("Failed to get service statuses from both formatted and basic docker compose ps commands");
         }
         catch (Exception ex)
         {
-            // If we can't get detailed status, create a generic unknown status
-            services.Add(new ServiceStatus
+            logger.LogError(ex, "Error getting service statuses from {DeployPath}", deployPath);
+            return new List<ServiceStatus>
             {
-                Name = "unknown",
-                ContainerName = "unknown",
-                Status = "unknown",
-                Ports = "",
-                IsHealthy = false,
-                IsTerminal = false,
-                Details = $"Failed to get service status: {ex.Message}"
-            });
+                new()
+                {
+                    Name = "unknown",
+                    ContainerName = "unknown",
+                    Status = "unknown",
+                    Ports = "",
+                    IsHealthy = false,
+                    IsTerminal = false,
+                    Details = $"Failed to get service status: {ex.Message}"
+                }
+            };
         }
 
-        return services;
+        return new List<ServiceStatus>();
+    }
+
+    /// <summary>
+    /// Parses formatted output from 'docker compose ps --format "table {{.Name}}\t{{.Service}}\t{{.Status}}\t{{.Ports}}"'.
+    ///
+    /// Expected format (tab-separated):
+    /// NAME            SERVICE    STATUS             PORTS
+    /// myapp-web-1     web        Up 2 minutes       0.0.0.0:8080->80/tcp
+    /// myapp-db-1      db         Up 2 minutes       3306/tcp
+    ///
+    /// Malformed input handling:
+    /// - Header lines (starting with "NAME" or "Container") → skipped
+    /// - Lines with fewer than 3 tab-separated fields → skipped (returns null)
+    /// - Missing service name (2nd field) → uses container name as service name
+    /// - Missing ports (4th field) → empty string used
+    /// </summary>
+    private static List<ServiceStatus> ParseFormattedDockerPs(string output)
+    {
+        return output.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Where(line => !IsHeaderLine(line))
+            .Select(ParseFormattedLine)
+            .Where(service => service != null)
+            .ToList()!;
+    }
+
+    private static bool IsHeaderLine(string line)
+    {
+        return line.StartsWith("NAME") || line.StartsWith("Container") || string.IsNullOrWhiteSpace(line);
+    }
+
+    private static ServiceStatus? ParseFormattedLine(string line)
+    {
+        var parts = line.Split('\t', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length < 3)
+            return null; // Malformed: need at least name, service, and status
+
+        var containerName = parts[0].Trim();
+        var serviceName = parts.Length > 1 ? parts[1].Trim() : containerName;
+        var status = parts[2].Trim();
+        var ports = parts.Length > 3 ? parts[3].Trim() : "";
+
+        return new ServiceStatus
+        {
+            Name = serviceName,
+            ContainerName = containerName,
+            Status = status,
+            Ports = ports,
+            IsHealthy = IsStatusHealthy(status),
+            IsTerminal = IsStatusTerminal(status),
+            Details = $"Container: {containerName}, Status: {status}"
+        };
+    }
+
+    /// <summary>
+    /// Parses basic output from 'docker compose ps' (without formatting).
+    ///
+    /// Expected format (space-separated, variable columns):
+    /// NAME          IMAGE      COMMAND        SERVICE    CREATED      STATUS         PORTS
+    /// myapp-web-1   myapp-web  "entrypoint"   web        2 min ago    Up 2 minutes   0.0.0.0:8080->80/tcp
+    /// myapp-db-1    postgres   "docker-ent"   db         2 min ago    Up 2 minutes   5432/tcp
+    ///
+    /// Malformed input handling:
+    /// - Header lines (containing "NAME", "Container", or starting with "--") → skipped
+    /// - Lines with fewer than 2 space-separated words → skipped (returns null)
+    /// - Unable to extract service name from container name → uses simplified container name
+    /// - Unable to find status in line → returns "unknown"
+    /// - Unable to find ports in line → returns empty string
+    ///
+    /// Note: This parser uses heuristics to extract status and ports since column positions vary.
+    /// It looks for keywords like "Up", "Exited", "Running" and port patterns.
+    /// </summary>
+    private static List<ServiceStatus> ParseBasicDockerPs(string output)
+    {
+        return output.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Where(line => !IsBasicHeaderLine(line))
+            .Select(ParseBasicLine)
+            .Where(service => service != null)
+            .ToList()!;
+    }
+
+    private static bool IsBasicHeaderLine(string line)
+    {
+        return line.Contains("NAME") || line.Contains("Container") || line.StartsWith("--") || string.IsNullOrWhiteSpace(line);
+    }
+
+    private static ServiceStatus? ParseBasicLine(string line)
+    {
+        var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length < 2)
+            return null; // Malformed: need at least container name and some status info
+
+        var containerName = parts[0];
+        var serviceName = ExtractServiceNameFromContainer(containerName);
+        var status = ExtractStatusFromLine(line);
+
+        return new ServiceStatus
+        {
+            Name = serviceName,
+            ContainerName = containerName,
+            Status = status,
+            Ports = ExtractPortsFromLine(line),
+            IsHealthy = IsStatusHealthy(status),
+            IsTerminal = IsStatusTerminal(status),
+            Details = line.Trim()
+        };
     }
 
     private static bool IsStatusHealthy(string status)
@@ -368,19 +320,13 @@ internal static class HealthCheckUtility
             return false;
 
         var lowerStatus = status.ToLowerInvariant();
-        
+
         // Terminal states - service won't change state without intervention
-        return lowerStatus.Contains("exited") || 
-               lowerStatus.Contains("dead") || 
+        return lowerStatus.Contains("exited") ||
+               lowerStatus.Contains("dead") ||
                lowerStatus.Contains("stopped") ||
                lowerStatus.Contains("killed") ||
                (lowerStatus.Contains("exit") && (lowerStatus.Contains("0") || lowerStatus.Contains("code")));
-    }
-
-    private static bool IsStatusFinal(string status)
-    {
-        // A status is final if it's either healthy or terminal
-        return IsStatusHealthy(status) || IsStatusTerminal(status);
     }
 
     private static string ExtractServiceNameFromContainer(string containerName)

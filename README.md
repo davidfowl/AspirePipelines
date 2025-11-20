@@ -67,17 +67,32 @@ aspire deploy
 
 ## Configuration
 
+The deployment pipeline uses three separate configuration sections for different concerns:
+
+- **`DockerSSH`**: SSH connection settings (host, username, port, key path)
+- **`DockerRegistry`**: Container registry settings (URL, repository prefix, credentials)
+- **`Deployment`**: Deployment-specific settings (remote path)
+
+This separation ensures clear boundaries between connection configuration, registry configuration, and deployment configuration.
+
 ### Interactive Prompts
 
-When deploying, the pipeline will prompt for required values if they're not already configured:
+When deploying, the pipeline will prompt for required values if they're not already configured. Prompts are organized by concern:
 
+**SSH Connection Configuration:**
 - **SSH Host**: The target deployment server hostname/IP
 - **SSH Username**: Username for SSH authentication
 - **SSH Port**: SSH port (defaults to 22)
-- **SSH Key Path**: Path to SSH private key file
-- **Remote Deploy Path**: Target directory on remote host (optional, defaults to `/home/{username}/aspire-app`)
-- **Registry URL**: Docker registry URL (e.g., docker.io)
-- **Repository Prefix**: Docker repository prefix/username
+- **SSH Authentication Method**: SSH private key path or password authentication
+
+**Container Registry Configuration:**
+- **Registry URL**: Docker registry URL (e.g., docker.io, ghcr.io)
+- **Repository Prefix**: Docker repository prefix/namespace
+- **Registry Username**: Optional username for registry authentication
+- **Registry Password**: Optional password/token for registry authentication
+
+**Deployment Configuration:**
+- **Remote Deploy Path**: Target directory on remote host (defaults to `/opt/{appname}`)
 
 ### Configuration File
 
@@ -89,10 +104,16 @@ You can pre-configure deployment settings in your `appsettings.json`:
     "SshHost": "your-server.com",
     "SshUsername": "your-username",
     "SshPort": "22",
-    "SshKeyPath": "path/to/your/private-key",
-    "RemoteDeployPath": "/opt/your-app",
+    "SshKeyPath": "path/to/your/private-key"
+  },
+  "DockerRegistry": {
     "RegistryUrl": "docker.io",
-    "RepositoryPrefix": "your-docker-username"
+    "RepositoryPrefix": "your-docker-username",
+    "RegistryUsername": "your-registry-username",
+    "RegistryPassword": "your-registry-password"
+  },
+  "Deployment": {
+    "RemoteDeployPath": "/opt/your-app"
   }
 }
 ```
@@ -102,13 +123,20 @@ You can pre-configure deployment settings in your `appsettings.json`:
 Alternatively, use environment variables:
 
 ```bash
+# SSH Configuration
 DOCKERSSH__SSHHOST=your-server.com
 DOCKERSSH__SSHUSERNAME=your-username
 DOCKERSSH__SSHPORT=22
 DOCKERSSH__SSHKEYPATH=path/to/your/private-key
-DOCKERSSH__REMOTEDEPLOYPATH=/opt/your-app
-DOCKERSSH__REGISTRYURL=docker.io
-DOCKERSSH__REPOSITORYPREFIX=your-docker-username
+
+# Docker Registry Configuration
+DOCKERREGISTRY__REGISTRYURL=docker.io
+DOCKERREGISTRY__REPOSITORYPREFIX=your-docker-username
+DOCKERREGISTRY__REGISTRYUSERNAME=your-registry-username
+DOCKERREGISTRY__REGISTRYPASSWORD=your-registry-password
+
+# Deployment Configuration
+DEPLOYMENT__REMOTEDEPLOYPATH=/opt/your-app
 ```
 
 ### Deployment State
@@ -164,7 +192,6 @@ When you run `aspire deploy`, the pipeline executes steps in the following order
 - `ssh-prereq-env`: Verifies Docker prerequisites on local machine
 - `configure-registry-env`: Prompts for and configures container registry credentials
 - `deploy-prereq`: Initializes deployment state
-- `prepare-ssh-context-env`: Gathers SSH connection information
 - `publish-env`: Generates docker-compose.yaml structure
 
 **Level 1** - Parallel build and SSH connection:
@@ -172,32 +199,35 @@ When you run `aspire deploy`, the pipeline executes steps in the following order
 - `establish-ssh-env`: Establishes SSH/SCP connection to target host
 - `publish`: Completes publish process
 
-**Level 2** - Parallel preparation:
+**Level 2** - Configure deployment settings:
+- `configure-deployment-env`: Prompts for deployment path configuration
 - `build`: Aggregates individual build steps
+
+**Level 3** - Prepare remote environment:
 - `prepare-remote-env`: Verifies Docker on remote host and prepares deployment directory
 
-**Level 3** - Prepare deployment files:
+**Level 4** - Prepare deployment files:
 - `prepare-env`: Built-in Aspire step that builds images and generates environment-specific `.env` files (e.g., `.env.Production`) and `docker-compose.yaml`
 
-**Level 4** - Push to registry:
+**Level 5** - Push to registry:
 - `push-images-env`: Tags images with timestamps and pushes to container registry
 
-**Level 5** - Merge configuration:
+**Level 6** - Merge configuration:
 - `merge-environment-env`: Updates environment file with registry image tags
 
-**Level 6** - Transfer files:
+**Level 7** - Transfer files:
 - `transfer-files-env`: Transfers docker-compose.yaml and .env to remote host via SCP
 
-**Level 7** - Deploy:
-- `docker-via-ssh-env`: Runs `docker compose` on remote host to deploy containers
+**Level 8** - Deploy:
+- `remote-docker-deploy-env`: Runs `docker compose` on remote host to deploy containers
 
-**Level 8** - Extract token:
+**Level 9** - Extract token:
 - `extract-dashboard-token-env`: Retrieves Aspire dashboard login token from container logs
 
-**Level 9** - Cleanup:
+**Level 10** - Cleanup:
 - `cleanup-ssh-env`: Closes SSH/SCP connections
 
-**Level 10-11** - Complete:
+**Level 11-12** - Complete:
 - `deploy-docker-ssh-env`: Final coordination step
 - `deploy`: Overall deployment completion
 
@@ -232,6 +262,22 @@ mergeEnv.DependsOn(pushImages); // Waits for both remote prep AND image push
 - **`IReportingStep`**: Provides progress reporting with tasks and status updates
 - **`IInteractionService`**: Handles interactive prompts for missing configuration
 - **`PipelineStepContext`**: Provides logger, cancellation token, and reporting step to each step action
+
+### Logging and Output
+
+The pipeline uses structured logging with appropriate log levels for different types of information:
+
+- **Task Success Messages**: High-level step completion status (e.g., "SSH connection established")
+- **INF (Information)**: Important deployment information like service URLs, health check summaries, and configuration details
+- **DBG (Debug)**: Detailed operational information like individual service health status, command execution details, and intermediate steps
+
+This layered approach keeps the default output clean while providing detailed diagnostic information when needed (via `--verbosity debug` or log files).
+
+**Example output structure:**
+- SSH connection: Single success message (detailed connection tests at DEBUG level)
+- Health checks: Summary at INFO level (individual service status at DEBUG level)
+- Service URLs: Formatted table at INFO level with deployment summary
+- Remote environment preparation: Single success message (Docker version, permissions at DEBUG level)
 
 ## Sample Project
 

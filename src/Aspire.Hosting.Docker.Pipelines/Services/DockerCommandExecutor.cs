@@ -3,9 +3,9 @@
 using Aspire.Hosting.Docker.Pipelines.Abstractions;
 using Aspire.Hosting.Pipelines;
 
-namespace Aspire.Hosting.Docker.Pipelines.Utilities;
+namespace Aspire.Hosting.Docker.Pipelines.Services;
 
-public class DockerCommandExecutor
+internal class DockerCommandExecutor
 {
     private readonly IProcessExecutor _processExecutor;
 

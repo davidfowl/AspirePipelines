@@ -1,6 +1,6 @@
 namespace Aspire.Hosting.Docker.Pipelines.Models;
 
-public class SSHConfiguration
+internal class SSHConfiguration
 {
     public string? DefaultKeyPath { get; set; }
     public string DefaultDeployPath { get; set; } = string.Empty;
@@ -8,7 +8,7 @@ public class SSHConfiguration
     public List<string> KnownHosts { get; set; } = [];
 }
 
-public class EnvironmentVariable
+internal class EnvironmentVariable
 {
     public string Key { get; set; } = string.Empty;
     public string Value { get; set; } = string.Empty;
@@ -16,14 +16,20 @@ public class EnvironmentVariable
     public string Description { get; set; } = string.Empty;
 }
 
-public class DockerSSHConfiguration
+internal class DockerSSHConfiguration
 {
     public string? SshHost { get; set; }
     public string? SshUsername { get; set; }
     public string? SshPort { get; set; }
     public string? SshKeyPath { get; set; }
-    public string? RemoteDeployPath { get; set; }
-    public string? RegistryUrl { get; set; }
-    public string? RegistryUsername { get; set; }
-    public string? RepositoryPrefix { get; set; }
+}
+
+internal class SSHConnectionContext
+{
+    // SSH connection configuration only
+    public required string TargetHost { get; set; }
+    public required string SshUsername { get; set; }
+    public string? SshPassword { get; set; }
+    public string? SshKeyPath { get; set; }
+    public required string SshPort { get; set; }
 }

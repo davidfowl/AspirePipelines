@@ -1,9 +1,9 @@
 using Aspire.Hosting.Docker.Pipelines.Abstractions;
 using Microsoft.Extensions.Logging;
 
-namespace Aspire.Hosting.Docker.Pipelines.Utilities;
+namespace Aspire.Hosting.Docker.Pipelines.Services;
 
-public class EnvironmentFileReader
+internal class EnvironmentFileReader
 {
     private readonly IFileSystem _fileSystem;
     private readonly ILogger<EnvironmentFileReader> _logger;

@@ -3,7 +3,7 @@ namespace Aspire.Hosting.Docker.Pipelines.Abstractions;
 /// <summary>
 /// Abstraction for executing external processes.
 /// </summary>
-public interface IProcessExecutor
+internal interface IProcessExecutor
 {
     /// <summary>
     /// Executes a process with the specified file name and arguments.
@@ -30,4 +30,4 @@ public interface IProcessExecutor
 /// <param name="ExitCode">The exit code returned by the process.</param>
 /// <param name="Output">The standard output from the process.</param>
 /// <param name="Error">The standard error from the process.</param>
-public record ProcessResult(int ExitCode, string Output, string Error);
+internal record ProcessResult(int ExitCode, string Output, string Error);
