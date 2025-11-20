@@ -46,8 +46,73 @@ public static class DockerPipelineExtensions
         resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<EnvironmentFileReader>();
         resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<SSHConfigurationDiscovery>();
 
+        // Register SSHConnectionManager as a keyed service (one per pipeline/resource)
+        resourceBuilder.ApplicationBuilder.Services.AddKeyedSingleton<ISSHConnectionManager>(
+            resourceBuilder.Resource,
+            (serviceProvider, key) =>
+            {
+                var logger = serviceProvider.GetRequiredService<ILogger<SSHConnectionManager>>();
+                return new SSHConnectionManager(logger);
+            });
+
+        // Register remote operation services as keyed services (one set per pipeline/resource)
+        resourceBuilder.ApplicationBuilder.Services.AddKeyedSingleton<IRemoteFileService>(
+            resourceBuilder.Resource,
+            (serviceProvider, key) =>
+            {
+                var sshConnectionManager = serviceProvider.GetRequiredKeyedService<ISSHConnectionManager>(key);
+                var logger = serviceProvider.GetRequiredService<ILogger<RemoteFileService>>();
+                return new RemoteFileService(sshConnectionManager, logger);
+            });
+
+        resourceBuilder.ApplicationBuilder.Services.AddKeyedSingleton<IRemoteDockerEnvironmentService>(
+            resourceBuilder.Resource,
+            (serviceProvider, key) =>
+            {
+                var sshConnectionManager = serviceProvider.GetRequiredKeyedService<ISSHConnectionManager>(key);
+                var logger = serviceProvider.GetRequiredService<ILogger<RemoteDockerEnvironmentService>>();
+                return new RemoteDockerEnvironmentService(sshConnectionManager, logger);
+            });
+
+        resourceBuilder.ApplicationBuilder.Services.AddKeyedSingleton<IRemoteDockerComposeService>(
+            resourceBuilder.Resource,
+            (serviceProvider, key) =>
+            {
+                var sshConnectionManager = serviceProvider.GetRequiredKeyedService<ISSHConnectionManager>(key);
+                var logger = serviceProvider.GetRequiredService<ILogger<RemoteDockerComposeService>>();
+                return new RemoteDockerComposeService(sshConnectionManager, logger);
+            });
+
+        resourceBuilder.ApplicationBuilder.Services.AddKeyedSingleton<IRemoteDeploymentMonitorService>(
+            resourceBuilder.Resource,
+            (serviceProvider, key) =>
+            {
+                var sshConnectionManager = serviceProvider.GetRequiredKeyedService<ISSHConnectionManager>(key);
+                var logger = serviceProvider.GetRequiredService<ILogger<RemoteDeploymentMonitorService>>();
+                return new RemoteDeploymentMonitorService(sshConnectionManager, logger);
+            });
+
+        resourceBuilder.ApplicationBuilder.Services.AddKeyedSingleton<IRemoteEnvironmentService>(
+            resourceBuilder.Resource,
+            (serviceProvider, key) =>
+            {
+                var sshConnectionManager = serviceProvider.GetRequiredKeyedService<ISSHConnectionManager>(key);
+                var environmentFileReader = serviceProvider.GetRequiredService<EnvironmentFileReader>();
+                var logger = serviceProvider.GetRequiredService<ILogger<RemoteEnvironmentService>>();
+                return new RemoteEnvironmentService(sshConnectionManager, environmentFileReader, logger);
+            });
+
+        resourceBuilder.ApplicationBuilder.Services.AddKeyedSingleton<IRemoteServiceInspectionService>(
+            resourceBuilder.Resource,
+            (serviceProvider, key) =>
+            {
+                var sshConnectionManager = serviceProvider.GetRequiredKeyedService<ISSHConnectionManager>(key);
+                var logger = serviceProvider.GetRequiredService<ILogger<RemoteServiceInspectionService>>();
+                return new RemoteServiceInspectionService(sshConnectionManager, logger);
+            });
+
         // Register DockerSSHPipeline as a keyed service, keyed on the Docker Compose environment resource
-        // Each pipeline creates its own SSHConnectionManager
+        // Injects all the high-level operation services
         resourceBuilder.ApplicationBuilder.Services.AddKeyedSingleton(
             resourceBuilder.Resource,
             (serviceProvider, key) =>
@@ -56,7 +121,13 @@ public static class DockerPipelineExtensions
                 var environmentFileReader = serviceProvider.GetRequiredService<EnvironmentFileReader>();
                 var sshConfigurationDiscovery = serviceProvider.GetRequiredService<SSHConfigurationDiscovery>();
                 var pipelineOutputService = serviceProvider.GetRequiredService<IPipelineOutputService>();
-                var logger = serviceProvider.GetRequiredService<ILogger<SSHConnectionManager>>();
+                var sshConnectionManager = serviceProvider.GetRequiredKeyedService<ISSHConnectionManager>(key);
+                var remoteFileService = serviceProvider.GetRequiredKeyedService<IRemoteFileService>(key);
+                var remoteDockerEnvironmentService = serviceProvider.GetRequiredKeyedService<IRemoteDockerEnvironmentService>(key);
+                var remoteDockerComposeService = serviceProvider.GetRequiredKeyedService<IRemoteDockerComposeService>(key);
+                var remoteDeploymentMonitorService = serviceProvider.GetRequiredKeyedService<IRemoteDeploymentMonitorService>(key);
+                var remoteEnvironmentService = serviceProvider.GetRequiredKeyedService<IRemoteEnvironmentService>(key);
+                var remoteServiceInspectionService = serviceProvider.GetRequiredKeyedService<IRemoteServiceInspectionService>(key);
 
                 return new DockerSSHPipeline(
                     (DockerComposeEnvironmentResource)key,
@@ -64,7 +135,13 @@ public static class DockerPipelineExtensions
                     environmentFileReader,
                     pipelineOutputService,
                     sshConfigurationDiscovery,
-                    logger);
+                    sshConnectionManager,
+                    remoteFileService,
+                    remoteDockerEnvironmentService,
+                    remoteDockerComposeService,
+                    remoteDeploymentMonitorService,
+                    remoteEnvironmentService,
+                    remoteServiceInspectionService);
             });
 
         return resourceBuilder.WithPipelineStepFactory(context =>
