@@ -1,5 +1,4 @@
 using Aspire.Hosting.Docker.Pipelines.Abstractions;
-using Aspire.Hosting.Docker.Pipelines.Utilities;
 using Microsoft.Extensions.Logging;
 
 namespace Aspire.Hosting.Docker.Pipelines.Services;

@@ -1,5 +1,5 @@
+using Aspire.Hosting.Docker.Pipelines.Services;
 using Aspire.Hosting.Docker.Pipelines.Tests.Fakes;
-using Aspire.Hosting.Docker.Pipelines.Utilities;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aspire.Hosting.Docker.Pipelines.Tests;

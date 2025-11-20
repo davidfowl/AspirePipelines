@@ -5,7 +5,6 @@ using Aspire.Hosting.Docker;
 using Aspire.Hosting.Docker.Pipelines.Abstractions;
 using Aspire.Hosting.Docker.Pipelines.Infrastructure;
 using Aspire.Hosting.Docker.Pipelines.Services;
-using Aspire.Hosting.Docker.Pipelines.Utilities;
 using Aspire.Hosting.Pipelines;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;

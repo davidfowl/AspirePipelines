@@ -3,12 +3,13 @@
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Docker.Pipelines.Abstractions;
 using Aspire.Hosting.Docker.Pipelines.Models;
+using Aspire.Hosting.Docker.Pipelines.Utilities;
 using Aspire.Hosting.Pipelines;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
-namespace Aspire.Hosting.Docker.Pipelines.Utilities;
+namespace Aspire.Hosting.Docker.Pipelines.Services;
 
 internal class SSHConfigurationDiscovery
 {
