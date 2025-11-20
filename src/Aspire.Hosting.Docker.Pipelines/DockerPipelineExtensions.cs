@@ -7,8 +7,10 @@ using Aspire.Hosting.Docker.Pipelines.Infrastructure;
 using Aspire.Hosting.Docker.Pipelines.Services;
 using Aspire.Hosting.Docker.Pipelines.Utilities;
 using Aspire.Hosting.Pipelines;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace Aspire.Hosting;
@@ -45,104 +47,22 @@ public static class DockerPipelineExtensions
         resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<DockerCommandExecutor>();
         resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<EnvironmentFileReader>();
         resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<SSHConfigurationDiscovery>();
+        resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<SSHConnectionFactory>();
+        resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<DockerRegistryService>();
 
-        // Register SSHConnectionManager as a keyed service (one per pipeline/resource)
-        resourceBuilder.ApplicationBuilder.Services.AddKeyedSingleton<ISSHConnectionManager>(
-            resourceBuilder.Resource,
-            (serviceProvider, key) =>
-            {
-                var logger = serviceProvider.GetRequiredService<ILogger<SSHConnectionManager>>();
-                return new SSHConnectionManager(logger);
-            });
-
-        // Register remote operation services as keyed services (one set per pipeline/resource)
-        resourceBuilder.ApplicationBuilder.Services.AddKeyedSingleton<IRemoteFileService>(
-            resourceBuilder.Resource,
-            (serviceProvider, key) =>
-            {
-                var sshConnectionManager = serviceProvider.GetRequiredKeyedService<ISSHConnectionManager>(key);
-                var logger = serviceProvider.GetRequiredService<ILogger<RemoteFileService>>();
-                return new RemoteFileService(sshConnectionManager, logger);
-            });
-
-        resourceBuilder.ApplicationBuilder.Services.AddKeyedSingleton<IRemoteDockerEnvironmentService>(
-            resourceBuilder.Resource,
-            (serviceProvider, key) =>
-            {
-                var sshConnectionManager = serviceProvider.GetRequiredKeyedService<ISSHConnectionManager>(key);
-                var logger = serviceProvider.GetRequiredService<ILogger<RemoteDockerEnvironmentService>>();
-                return new RemoteDockerEnvironmentService(sshConnectionManager, logger);
-            });
-
-        resourceBuilder.ApplicationBuilder.Services.AddKeyedSingleton<IRemoteDockerComposeService>(
-            resourceBuilder.Resource,
-            (serviceProvider, key) =>
-            {
-                var sshConnectionManager = serviceProvider.GetRequiredKeyedService<ISSHConnectionManager>(key);
-                var logger = serviceProvider.GetRequiredService<ILogger<RemoteDockerComposeService>>();
-                return new RemoteDockerComposeService(sshConnectionManager, logger);
-            });
-
-        resourceBuilder.ApplicationBuilder.Services.AddKeyedSingleton<IRemoteDeploymentMonitorService>(
-            resourceBuilder.Resource,
-            (serviceProvider, key) =>
-            {
-                var sshConnectionManager = serviceProvider.GetRequiredKeyedService<ISSHConnectionManager>(key);
-                var logger = serviceProvider.GetRequiredService<ILogger<RemoteDeploymentMonitorService>>();
-                return new RemoteDeploymentMonitorService(sshConnectionManager, logger);
-            });
-
-        resourceBuilder.ApplicationBuilder.Services.AddKeyedSingleton<IRemoteEnvironmentService>(
-            resourceBuilder.Resource,
-            (serviceProvider, key) =>
-            {
-                var sshConnectionManager = serviceProvider.GetRequiredKeyedService<ISSHConnectionManager>(key);
-                var environmentFileReader = serviceProvider.GetRequiredService<EnvironmentFileReader>();
-                var logger = serviceProvider.GetRequiredService<ILogger<RemoteEnvironmentService>>();
-                return new RemoteEnvironmentService(sshConnectionManager, environmentFileReader, logger);
-            });
-
-        resourceBuilder.ApplicationBuilder.Services.AddKeyedSingleton<IRemoteServiceInspectionService>(
-            resourceBuilder.Resource,
-            (serviceProvider, key) =>
-            {
-                var sshConnectionManager = serviceProvider.GetRequiredKeyedService<ISSHConnectionManager>(key);
-                var logger = serviceProvider.GetRequiredService<ILogger<RemoteServiceInspectionService>>();
-                return new RemoteServiceInspectionService(sshConnectionManager, logger);
-            });
-
-        // Register DockerSSHPipeline as a keyed service, keyed on the Docker Compose environment resource
-        // Injects all the high-level operation services
+        // Register DockerSSHPipeline as a keyed service (one per resource)
         resourceBuilder.ApplicationBuilder.Services.AddKeyedSingleton(
             resourceBuilder.Resource,
-            (serviceProvider, key) =>
-            {
-                var dockerCommandExecutor = serviceProvider.GetRequiredService<DockerCommandExecutor>();
-                var environmentFileReader = serviceProvider.GetRequiredService<EnvironmentFileReader>();
-                var sshConfigurationDiscovery = serviceProvider.GetRequiredService<SSHConfigurationDiscovery>();
-                var pipelineOutputService = serviceProvider.GetRequiredService<IPipelineOutputService>();
-                var sshConnectionManager = serviceProvider.GetRequiredKeyedService<ISSHConnectionManager>(key);
-                var remoteFileService = serviceProvider.GetRequiredKeyedService<IRemoteFileService>(key);
-                var remoteDockerEnvironmentService = serviceProvider.GetRequiredKeyedService<IRemoteDockerEnvironmentService>(key);
-                var remoteDockerComposeService = serviceProvider.GetRequiredKeyedService<IRemoteDockerComposeService>(key);
-                var remoteDeploymentMonitorService = serviceProvider.GetRequiredKeyedService<IRemoteDeploymentMonitorService>(key);
-                var remoteEnvironmentService = serviceProvider.GetRequiredKeyedService<IRemoteEnvironmentService>(key);
-                var remoteServiceInspectionService = serviceProvider.GetRequiredKeyedService<IRemoteServiceInspectionService>(key);
-
-                return new DockerSSHPipeline(
-                    (DockerComposeEnvironmentResource)key,
-                    dockerCommandExecutor,
-                    environmentFileReader,
-                    pipelineOutputService,
-                    sshConfigurationDiscovery,
-                    sshConnectionManager,
-                    remoteFileService,
-                    remoteDockerEnvironmentService,
-                    remoteDockerComposeService,
-                    remoteDeploymentMonitorService,
-                    remoteEnvironmentService,
-                    remoteServiceInspectionService);
-            });
+            (sp, key) => new DockerSSHPipeline(
+                (DockerComposeEnvironmentResource)key,
+                sp.GetRequiredService<DockerCommandExecutor>(),
+                sp.GetRequiredService<EnvironmentFileReader>(),
+                sp.GetRequiredService<IPipelineOutputService>(),
+                sp.GetRequiredService<SSHConnectionFactory>(),
+                sp.GetRequiredService<DockerRegistryService>(),
+                sp.GetRequiredService<IConfiguration>(),
+                sp.GetRequiredService<IHostEnvironment>(),
+                sp.GetRequiredService<ILoggerFactory>()));
 
         return resourceBuilder.WithPipelineStepFactory(context =>
         {

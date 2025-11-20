@@ -12,4 +12,8 @@
     <PackageReference Include="SSH.NET" Version="2025.0.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Aspire.Hosting.Docker.Pipelines.Tests" />
+  </ItemGroup>
+
 </Project>

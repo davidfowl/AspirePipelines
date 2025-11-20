@@ -21,7 +21,7 @@ internal class SSHConfigurationDiscovery
         _logger = logger;
     }
 
-    public Task<SSHConfiguration> DiscoverSSHConfiguration(PipelineStepContext context)
+    public SSHConfiguration DiscoverSSHConfiguration(PipelineStepContext context)
     {
         // Get the application name from the host environment
         var appName = context.Services.GetRequiredService<IHostEnvironment>().ApplicationName.ToLowerInvariant();
@@ -89,7 +89,7 @@ internal class SSHConfigurationDiscovery
         }
 
         config.DefaultDeployPath = $"/opt/{appName}";
-        return Task.FromResult(config);
+        return config;
     }
 
     private void ParseKnownHostsFile(string filePath, List<string> knownHosts)

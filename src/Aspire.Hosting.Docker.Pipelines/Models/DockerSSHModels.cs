@@ -22,19 +22,14 @@ public class DockerSSHConfiguration
     public string? SshUsername { get; set; }
     public string? SshPort { get; set; }
     public string? SshKeyPath { get; set; }
-    public string? RemoteDeployPath { get; set; }
-    public string? RegistryUrl { get; set; }
-    public string? RegistryUsername { get; set; }
-    public string? RepositoryPrefix { get; set; }
 }
 
 public class SSHConnectionContext
 {
-    // User-selected values
+    // SSH connection configuration only
     public required string TargetHost { get; set; }
     public required string SshUsername { get; set; }
     public string? SshPassword { get; set; }
     public string? SshKeyPath { get; set; }
     public required string SshPort { get; set; }
-    public required string RemoteDeployPath { get; set; }
 }
