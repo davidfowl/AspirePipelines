@@ -3,7 +3,6 @@
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Docker.Pipelines.Abstractions;
 using Aspire.Hosting.Docker.Pipelines.Models;
-using Aspire.Hosting.Docker.Pipelines.Utilities;
 using Aspire.Hosting.Pipelines;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -52,7 +51,7 @@ internal class SSHConfigurationDiscovery
             // Then add any other SSH-like keys that aren't in the common list
             var otherKeyFiles = _fileSystem.GetFiles(sshDir, "*", SearchOption.TopDirectoryOnly)
                 .Where(f => !_fileSystem.GetFileName(f).EndsWith(".pub") && !_fileSystem.GetFileName(f).EndsWith(".ppk"))
-                .Where(f => !commonKeyFiles.Contains(_fileSystem.GetFileName(f)) && SSHUtility.IsLikelySSHKey(f))
+                .Where(f => !commonKeyFiles.Contains(_fileSystem.GetFileName(f)) && IsLikelySSHKey(f))
                 .OrderBy(f => _fileSystem.GetFileName(f))
                 .ToList();
 
@@ -150,6 +149,40 @@ internal class SSHConfigurationDiscovery
         {
             // Log error but don't fail the entire discovery process
             _logger.LogWarning(ex, "Could not parse known_hosts file");
+        }
+    }
+
+    private bool IsLikelySSHKey(string filePath)
+    {
+        try
+        {
+            // Check file size (SSH keys are typically between 100 bytes and 10KB)
+            var fileInfo = new FileInfo(filePath);
+            if (fileInfo.Length is < 100 or > 10240)
+                return false;
+
+            // Read first few lines to check for SSH key headers
+            var firstLines = _fileSystem.ReadAllLines(filePath).Take(3).ToArray();
+            if (firstLines.Length == 0)
+                return false;
+
+            var firstLine = firstLines[0].Trim();
+
+            // Check for common SSH key headers
+            var sshKeyHeaders = new[]
+            {
+                "-----BEGIN OPENSSH PRIVATE KEY-----",
+                "-----BEGIN RSA PRIVATE KEY-----",
+                "-----BEGIN DSA PRIVATE KEY-----",
+                "-----BEGIN EC PRIVATE KEY-----",
+                "-----BEGIN PRIVATE KEY-----"
+            };
+
+            return sshKeyHeaders.Any(header => firstLine.StartsWith(header, StringComparison.OrdinalIgnoreCase));
+        }
+        catch
+        {
+            return false;
         }
     }
 }

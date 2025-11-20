@@ -2,7 +2,6 @@
 
 using Aspire.Hosting.Docker.Pipelines.Abstractions;
 using Aspire.Hosting.Docker.Pipelines.Models;
-using Aspire.Hosting.Docker.Pipelines.Utilities;
 using Aspire.Hosting.Pipelines;
 using Microsoft.Extensions.Logging;
 using Renci.SshNet;
@@ -41,15 +40,15 @@ internal class SSHConnectionManager : ISSHConnectionManager
         {
             _logger.LogDebug("Creating SSH and SCP connections...");
 
-            var connectionInfo = SSHUtility.CreateConnectionInfo(
+            var connectionInfo = CreateConnectionInfo(
                 context.TargetHost,
                 context.SshUsername,
                 context.SshPassword,
                 context.SshKeyPath,
                 context.SshPort);
 
-            _sshClient = await SSHUtility.CreateSSHClient(connectionInfo, cancellationToken);
-            _scpClient = await SSHUtility.CreateSCPClient(connectionInfo, cancellationToken);
+            _sshClient = await CreateSSHClientAsync(connectionInfo, cancellationToken);
+            _scpClient = await CreateSCPClientAsync(connectionInfo, cancellationToken);
 
             _logger.LogDebug("SSH and SCP connections established successfully");
             await connectTask.SucceedAsync("SSH and SCP connections established", cancellationToken: cancellationToken);
@@ -198,5 +197,56 @@ internal class SSHConnectionManager : ISSHConnectionManager
     {
         await DisconnectAsync();
         GC.SuppressFinalize(this);
+    }
+
+    private static async Task<SshClient> CreateSSHClientAsync(ConnectionInfo connectionInfo, CancellationToken cancellationToken)
+    {
+        var client = new SshClient(connectionInfo);
+
+        await client.ConnectAsync(cancellationToken);
+
+        if (!client.IsConnected)
+        {
+            client.Dispose();
+            throw new InvalidOperationException("Failed to establish SSH connection");
+        }
+
+        return client;
+    }
+
+    private static async Task<ScpClient> CreateSCPClientAsync(ConnectionInfo connectionInfo, CancellationToken cancellationToken)
+    {
+        var client = new ScpClient(connectionInfo);
+
+        await client.ConnectAsync(cancellationToken);
+
+        if (!client.IsConnected)
+        {
+            client.Dispose();
+            throw new InvalidOperationException("Failed to establish SCP connection");
+        }
+
+        return client;
+    }
+
+    private static ConnectionInfo CreateConnectionInfo(string host, string username, string? password, string? keyPath, string port)
+    {
+        var portInt = int.Parse(port);
+
+        if (!string.IsNullOrEmpty(keyPath))
+        {
+            // Use key-based authentication
+            var keyFile = new PrivateKeyFile(keyPath, password ?? "");
+            return new ConnectionInfo(host, portInt, username, new PrivateKeyAuthenticationMethod(username, keyFile));
+        }
+        else if (!string.IsNullOrEmpty(password))
+        {
+            // Use password authentication
+            return new ConnectionInfo(host, portInt, username, new PasswordAuthenticationMethod(username, password));
+        }
+        else
+        {
+            throw new InvalidOperationException("Either SSH password or SSH private key path must be provided");
+        }
     }
 }
