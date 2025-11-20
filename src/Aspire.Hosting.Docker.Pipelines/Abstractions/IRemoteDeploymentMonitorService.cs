@@ -1,3 +1,7 @@
+#pragma warning disable ASPIREPIPELINES001
+
+using Aspire.Hosting.Pipelines;
+
 namespace Aspire.Hosting.Docker.Pipelines.Abstractions;
 
 /// <summary>
@@ -24,6 +28,21 @@ public interface IRemoteDeploymentMonitorService
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>Current deployment status</returns>
     Task<DeploymentStatus> GetStatusAsync(string deployPath, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Monitors service health with real-time reporting via IReportingStep.
+    /// </summary>
+    /// <param name="deployPath">Path to the deployment directory</param>
+    /// <param name="step">Reporting step for progress updates</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    /// <param name="maxWaitTime">Maximum time to wait for services</param>
+    /// <param name="checkInterval">Interval between health checks</param>
+    Task MonitorServiceHealthAsync(
+        string deployPath,
+        IReportingStep step,
+        CancellationToken cancellationToken,
+        TimeSpan? maxWaitTime = null,
+        TimeSpan? checkInterval = null);
 }
 
 /// <summary>

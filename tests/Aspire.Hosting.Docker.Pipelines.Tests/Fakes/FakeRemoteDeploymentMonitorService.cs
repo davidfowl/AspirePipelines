@@ -1,4 +1,7 @@
+#pragma warning disable ASPIREPIPELINES001
+
 using Aspire.Hosting.Docker.Pipelines.Abstractions;
+using Aspire.Hosting.Pipelines;
 
 namespace Aspire.Hosting.Docker.Pipelines.Tests.Fakes;
 
@@ -88,6 +91,23 @@ public class FakeRemoteDeploymentMonitorService : IRemoteDeploymentMonitorServic
             });
 
         return Task.FromResult(status);
+    }
+
+    public Task MonitorServiceHealthAsync(
+        string deployPath,
+        IReportingStep step,
+        CancellationToken cancellationToken,
+        TimeSpan? maxWaitTime = null,
+        TimeSpan? checkInterval = null)
+    {
+        _operations.Add($"MonitorServiceHealth:{deployPath}");
+
+        if (_shouldHealthCheckFail)
+        {
+            throw new InvalidOperationException("Health check monitoring failed (configured to fail)");
+        }
+
+        return Task.CompletedTask;
     }
 
     /// <summary>

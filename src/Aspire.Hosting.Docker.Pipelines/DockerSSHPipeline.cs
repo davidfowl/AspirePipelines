@@ -379,8 +379,8 @@ internal class DockerSSHPipeline(
         var startResult = await factory.DockerComposeService.StartAsync(deployPath, cancellationToken);
         await startTask.SucceedAsync("New containers started", cancellationToken: cancellationToken);
 
-        // Use the new HealthCheckUtility to check each service individually
-        await HealthCheckUtility.CheckServiceHealth(deployPath, _sshConnectionManager!.SshClient!, step, cancellationToken);
+        // Monitor service health with real-time reporting
+        await factory.DeploymentMonitorService.MonitorServiceHealthAsync(deployPath, step, cancellationToken);
 
         // Get deployment status with health info and URLs
         var deploymentStatus = await factory.DeploymentMonitorService.GetStatusAsync(deployPath, cancellationToken);

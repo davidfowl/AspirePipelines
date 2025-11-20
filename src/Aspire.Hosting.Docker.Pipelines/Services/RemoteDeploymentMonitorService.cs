@@ -39,7 +39,8 @@ internal class RemoteDeploymentMonitorService : IRemoteDeploymentMonitorService
         // This is a wrapper to provide a cleaner API
         var serviceStatuses = await HealthCheckUtility.GetServiceStatuses(
             deployPath,
-            _sshConnectionManager.SshClient,
+            _sshConnectionManager,
+            _logger,
             cancellationToken);
 
         var healthyCount = serviceStatuses.Count(s => s.IsHealthy);
@@ -74,7 +75,8 @@ internal class RemoteDeploymentMonitorService : IRemoteDeploymentMonitorService
         // Get service health statuses
         var serviceStatuses = await HealthCheckUtility.GetServiceStatuses(
             deployPath,
-            _sshConnectionManager.SshClient,
+            _sshConnectionManager,
+            _logger,
             cancellationToken);
 
         var healthyCount = serviceStatuses.Count(s => s.IsHealthy);
@@ -83,7 +85,8 @@ internal class RemoteDeploymentMonitorService : IRemoteDeploymentMonitorService
         // Get service URLs (returns Dictionary<string, List<string>> where value is list of URLs)
         var serviceUrlsRaw = await PortInformationUtility.ExtractPortInformation(
             deployPath,
-            _sshConnectionManager.SshClient,
+            _sshConnectionManager,
+            _logger,
             cancellationToken);
 
         // Flatten to single URL per service (take first URL)
@@ -113,5 +116,25 @@ internal class RemoteDeploymentMonitorService : IRemoteDeploymentMonitorService
             HealthyServices: healthyCount,
             ServiceUrls: serviceUrls,
             Services: services);
+    }
+
+    public async Task MonitorServiceHealthAsync(
+        string deployPath,
+        IReportingStep step,
+        CancellationToken cancellationToken,
+        TimeSpan? maxWaitTime = null,
+        TimeSpan? checkInterval = null)
+    {
+        _logger.LogDebug("Monitoring service health for {DeployPath}", deployPath);
+
+        // Delegate to HealthCheckUtility for now
+        await HealthCheckUtility.CheckServiceHealth(
+            deployPath,
+            _sshConnectionManager,
+            step,
+            _logger,
+            cancellationToken,
+            maxWaitTime,
+            checkInterval);
     }
 }
