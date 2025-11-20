@@ -444,16 +444,4 @@ internal class DockerSSHPipeline(
 
         await finalizeStep.SucceedAsync($"Environment configuration finalized with {deploymentResult.VariableCount} variables");
     }
-
-    private static string ExpandRemotePath(string path)
-    {
-        if (path.StartsWith("~"))
-        {
-            // Replace ~ with $HOME for shell expansion
-            return path.Replace("~", "$HOME");
-        }
-
-        return path;
-    }
-
 }
