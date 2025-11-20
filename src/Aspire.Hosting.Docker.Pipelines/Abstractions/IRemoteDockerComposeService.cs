@@ -3,7 +3,7 @@ namespace Aspire.Hosting.Docker.Pipelines.Abstractions;
 /// <summary>
 /// Provides high-level Docker Compose operations on remote servers.
 /// </summary>
-public interface IRemoteDockerComposeService
+internal interface IRemoteDockerComposeService
 {
     /// <summary>
     /// Stops all containers in a Docker Compose deployment.
@@ -42,7 +42,7 @@ public interface IRemoteDockerComposeService
 /// <summary>
 /// Result of a Docker Compose operation.
 /// </summary>
-public record ComposeOperationResult(
+internal record ComposeOperationResult(
     int ExitCode,
     string Output,
     string Error,

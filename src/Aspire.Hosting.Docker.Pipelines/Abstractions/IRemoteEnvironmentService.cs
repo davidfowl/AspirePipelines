@@ -3,7 +3,7 @@ namespace Aspire.Hosting.Docker.Pipelines.Abstractions;
 /// <summary>
 /// Provides high-level operations for managing environment configuration on remote servers.
 /// </summary>
-public interface IRemoteEnvironmentService
+internal interface IRemoteEnvironmentService
 {
     /// <summary>
     /// Deploys environment configuration to the remote server.
@@ -24,7 +24,7 @@ public interface IRemoteEnvironmentService
 /// <summary>
 /// Result of deploying environment configuration to a remote server.
 /// </summary>
-public record EnvironmentDeploymentResult(
+internal record EnvironmentDeploymentResult(
     int VariableCount,
     string RemoteEnvPath,
     Dictionary<string, string> MergedVariables);

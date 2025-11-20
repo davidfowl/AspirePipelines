@@ -219,7 +219,7 @@ When you run `aspire deploy`, the pipeline executes steps in the following order
 - `transfer-files-env`: Transfers docker-compose.yaml and .env to remote host via SCP
 
 **Level 8** - Deploy:
-- `docker-via-ssh-env`: Runs `docker compose` on remote host to deploy containers
+- `remote-docker-deploy-env`: Runs `docker compose` on remote host to deploy containers
 
 **Level 9** - Extract token:
 - `extract-dashboard-token-env`: Retrieves Aspire dashboard login token from container logs
@@ -262,6 +262,22 @@ mergeEnv.DependsOn(pushImages); // Waits for both remote prep AND image push
 - **`IReportingStep`**: Provides progress reporting with tasks and status updates
 - **`IInteractionService`**: Handles interactive prompts for missing configuration
 - **`PipelineStepContext`**: Provides logger, cancellation token, and reporting step to each step action
+
+### Logging and Output
+
+The pipeline uses structured logging with appropriate log levels for different types of information:
+
+- **Task Success Messages**: High-level step completion status (e.g., "SSH connection established")
+- **INF (Information)**: Important deployment information like service URLs, health check summaries, and configuration details
+- **DBG (Debug)**: Detailed operational information like individual service health status, command execution details, and intermediate steps
+
+This layered approach keeps the default output clean while providing detailed diagnostic information when needed (via `--verbosity debug` or log files).
+
+**Example output structure:**
+- SSH connection: Single success message (detailed connection tests at DEBUG level)
+- Health checks: Summary at INFO level (individual service status at DEBUG level)
+- Service URLs: Formatted table at INFO level with deployment summary
+- Remote environment preparation: Single success message (Docker version, permissions at DEBUG level)
 
 ## Sample Project
 

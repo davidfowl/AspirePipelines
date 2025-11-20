@@ -3,7 +3,7 @@ namespace Aspire.Hosting.Docker.Pipelines.Abstractions;
 /// <summary>
 /// Abstraction for file system operations.
 /// </summary>
-public interface IFileSystem
+internal interface IFileSystem
 {
     /// <summary>
     /// Checks if a file exists at the specified path.

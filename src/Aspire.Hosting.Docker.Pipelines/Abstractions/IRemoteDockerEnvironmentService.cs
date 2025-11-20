@@ -3,7 +3,7 @@ namespace Aspire.Hosting.Docker.Pipelines.Abstractions;
 /// <summary>
 /// Provides high-level operations for validating and preparing remote Docker environments.
 /// </summary>
-public interface IRemoteDockerEnvironmentService
+internal interface IRemoteDockerEnvironmentService
 {
     /// <summary>
     /// Validates that the remote server has a properly configured Docker environment.
@@ -34,7 +34,7 @@ public interface IRemoteDockerEnvironmentService
 /// <summary>
 /// Information about a Docker environment on a remote server.
 /// </summary>
-public record DockerEnvironmentInfo(
+internal record DockerEnvironmentInfo(
     string DockerVersion,
     string ServerVersion,
     string ComposeVersion,
@@ -43,6 +43,6 @@ public record DockerEnvironmentInfo(
 /// <summary>
 /// Information about the deployment state in a directory.
 /// </summary>
-public record DeploymentState(
+internal record DeploymentState(
     int ExistingContainerCount,
     bool HasPreviousDeployment);

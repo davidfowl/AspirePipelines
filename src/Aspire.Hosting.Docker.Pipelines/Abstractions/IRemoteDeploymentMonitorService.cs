@@ -7,7 +7,7 @@ namespace Aspire.Hosting.Docker.Pipelines.Abstractions;
 /// <summary>
 /// Provides high-level operations for monitoring deployment health and status on remote servers.
 /// </summary>
-public interface IRemoteDeploymentMonitorService
+internal interface IRemoteDeploymentMonitorService
 {
     /// <summary>
     /// Waits for services in a deployment to become healthy.
@@ -48,7 +48,7 @@ public interface IRemoteDeploymentMonitorService
 /// <summary>
 /// Result of a health check operation.
 /// </summary>
-public record HealthCheckResult(
+internal record HealthCheckResult(
     int TotalServices,
     int HealthyServices,
     List<ServiceHealthInfo> ServiceDetails);
@@ -56,7 +56,7 @@ public record HealthCheckResult(
 /// <summary>
 /// Current deployment status including service health and URLs.
 /// </summary>
-public record DeploymentStatus(
+internal record DeploymentStatus(
     int TotalServices,
     int HealthyServices,
     Dictionary<string, string> ServiceUrls,
@@ -65,7 +65,7 @@ public record DeploymentStatus(
 /// <summary>
 /// Health information for a single service.
 /// </summary>
-public record ServiceHealthInfo(
+internal record ServiceHealthInfo(
     string ServiceName,
     bool IsHealthy,
     string Status,

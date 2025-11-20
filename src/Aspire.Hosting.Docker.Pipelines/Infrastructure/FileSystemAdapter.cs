@@ -5,7 +5,7 @@ namespace Aspire.Hosting.Docker.Pipelines.Infrastructure;
 /// <summary>
 /// Concrete implementation of IFileSystem that wraps System.IO operations.
 /// </summary>
-public class FileSystemAdapter : IFileSystem
+internal class FileSystemAdapter : IFileSystem
 {
     public bool FileExists(string path) => File.Exists(path);
 

@@ -9,7 +9,7 @@ namespace Aspire.Hosting.Docker.Pipelines.Abstractions;
 /// <summary>
 /// Manages SSH and SCP connections for remote operations.
 /// </summary>
-public interface ISSHConnectionManager : IAsyncDisposable
+internal interface ISSHConnectionManager : IAsyncDisposable
 {
     /// <summary>
     /// Gets whether the SSH connection is currently established.

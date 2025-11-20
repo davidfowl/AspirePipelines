@@ -8,7 +8,7 @@ namespace Aspire.Hosting.Docker.Pipelines.Infrastructure;
 /// <summary>
 /// Concrete implementation of IProcessExecutor that wraps System.Diagnostics.Process.
 /// </summary>
-public class ProcessExecutor : IProcessExecutor
+internal class ProcessExecutor : IProcessExecutor
 {
     private readonly ILogger<ProcessExecutor> _logger;
 

@@ -4,7 +4,7 @@ using System.Text.Json;
 
 namespace Aspire.Hosting.Docker.Pipelines.Utilities;
 
-public static class PortInformationUtility
+internal static class PortInformationUtility
 {
     public static async Task<Dictionary<string, List<string>>> ExtractPortInformation(string deployPath, ISSHConnectionManager sshConnectionManager, ILogger logger, CancellationToken cancellationToken)
     {

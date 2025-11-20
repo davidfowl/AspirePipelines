@@ -3,7 +3,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Aspire.Hosting.Docker.Pipelines.Services;
 
-public class EnvironmentFileReader
+internal class EnvironmentFileReader
 {
     private readonly IFileSystem _fileSystem;
     private readonly ILogger<EnvironmentFileReader> _logger;

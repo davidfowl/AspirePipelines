@@ -3,7 +3,7 @@ namespace Aspire.Hosting.Docker.Pipelines.Abstractions;
 /// <summary>
 /// Provides high-level operations for inspecting running services on remote servers.
 /// </summary>
-public interface IRemoteServiceInspectionService
+internal interface IRemoteServiceInspectionService
 {
     /// <summary>
     /// Gets logs from a running service.

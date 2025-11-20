@@ -3,7 +3,7 @@ namespace Aspire.Hosting.Docker.Pipelines.Abstractions;
 /// <summary>
 /// Provides high-level file transfer and verification operations for remote servers.
 /// </summary>
-public interface IRemoteFileService
+internal interface IRemoteFileService
 {
     /// <summary>
     /// Transfers a file to the remote server and verifies it arrived correctly.
@@ -29,7 +29,7 @@ public interface IRemoteFileService
 /// <summary>
 /// Result of a file transfer operation.
 /// </summary>
-public record FileTransferResult(
+internal record FileTransferResult(
     bool Success,
     long BytesTransferred,
     bool Verified,
@@ -38,7 +38,7 @@ public record FileTransferResult(
 /// <summary>
 /// Information about a file on the remote server.
 /// </summary>
-public record RemoteFileInfo(
+internal record RemoteFileInfo(
     string Path,
     long Size,
     bool Exists);
