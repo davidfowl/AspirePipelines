@@ -186,50 +186,59 @@ Docker Compose environments include a built-in `prepare-env` step that handles i
 
 #### Pipeline Step Execution Flow
 
-When you run `aspire deploy`, the pipeline executes steps in the following order:
+When you run `aspire deploy`, the pipeline executes steps in the following order.
 
-**Level 0** - Parallel execution of independent setup steps:
-- `ssh-prereq-env`: Verifies Docker prerequisites on local machine
-- `configure-registry-env`: Prompts for and configures container registry credentials
-- `deploy-prereq`: Initializes deployment state
-- `publish-env`: Generates docker-compose.yaml structure
+**Key Design Principle: Fail-Fast Input Gathering**
 
-**Level 1** - Parallel build and SSH connection:
-- `build-apiservice`, `build-webfrontend`: Build container images for each project
-- `establish-ssh-env`: Establishes SSH/SCP connection to target host
-- `publish`: Completes publish process
+All interactive prompts for user input (SSH credentials, registry settings, deployment path) are gathered at the beginning of the pipeline before any expensive operations like building images, pushing to registries, or deploying. This ensures users aren't interrupted mid-deployment and prevents wasted work if they cancel during input prompts.
 
-**Level 2** - Configure deployment settings:
-- `configure-deployment-env`: Prompts for deployment path configuration
-- `build`: Aggregates individual build steps
+**Implementation:** The pipeline uses an elegant dependency chain where configuration steps declare themselves as `RequiredBy("build-prereq")`. Since build steps already depend on `build-prereq` (from the framework), this creates an automatic chain: config steps → `build-prereq` → build steps. No direct modification of build steps needed!
 
-**Level 3** - Prepare remote environment:
-- `prepare-remote-env`: Verifies Docker on remote host and prepares deployment directory
+**Pipeline Execution Flow:**
 
-**Level 4** - Prepare deployment files:
-- `prepare-env`: Built-in Aspire step that builds images and generates environment-specific `.env` files (e.g., `.env.Production`) and `docker-compose.yaml`
+1. **Initialize state and gather inputs** (all run in parallel):
+   - `deploy-prereq`: Initializes deployment state
+   - `publish-env`: Generates docker-compose.yaml structure
+   - `establish-ssh-env`: Establishes SSH/SCP connection, prompts for SSH credentials if needed
+   - `configure-registry-env`: Prompts for and configures container registry credentials
+   - `ssh-prereq-env`: Verifies Docker prerequisites on local machine
 
-**Level 5** - Push to registry:
-- `push-images-env`: Tags images with timestamps and pushes to container registry
+2. **Complete input gathering**:
+   - `configure-deployment-env`: Prompts for deployment path configuration (depends on SSH)
+   - `publish`: Completes publish process
 
-**Level 6** - Merge configuration:
-- `merge-environment-env`: Updates environment file with registry image tags
+3. **Prerequisites ready** (waits for ALL input via RequiredBy chain):
+   - `build-prereq`: Build prerequisites check (automatically waits for config steps via RequiredBy)
+   - `prepare-remote-env`: Verifies Docker on remote host and prepares deployment directory
 
-**Level 7** - Transfer files:
-- `transfer-files-env`: Transfers docker-compose.yaml and .env to remote host via SCP
+4. **Build images** (depends on build-prereq, which waited for all config):
+   - `build-apiservice`, `build-webfrontend`: Build container images for each project
+   - `build`: Aggregates individual build steps
 
-**Level 8** - Deploy:
-- `remote-docker-deploy-env`: Runs `docker compose` on remote host to deploy containers
+5. **Prepare environment**:
+   - `prepare-env`: Built-in Aspire step that generates environment-specific `.env` files (e.g., `.env.Production`) and `docker-compose.yaml`
 
-**Level 9** - Extract token:
-- `extract-dashboard-token-env`: Retrieves Aspire dashboard login token from container logs
+6. **Push to registry**:
+   - `push-images-env`: Tags images with timestamps and pushes to container registry
 
-**Level 10** - Cleanup:
-- `cleanup-ssh-env`: Closes SSH/SCP connections
+7. **Merge configuration**:
+   - `merge-environment-env`: Updates environment file with registry image tags
 
-**Level 11-12** - Complete:
-- `deploy-docker-ssh-env`: Final coordination step
-- `deploy`: Overall deployment completion
+8. **Transfer files**:
+   - `transfer-files-env`: Transfers docker-compose.yaml and .env to remote host via SCP
+
+9. **Deploy**:
+   - `remote-docker-deploy-env`: Runs `docker compose` on remote host to deploy containers
+
+10. **Extract token**:
+    - `extract-dashboard-token-env`: Retrieves Aspire dashboard login token from container logs
+
+11. **Cleanup**:
+    - `cleanup-ssh-env`: Closes SSH/SCP connections
+
+12. **Complete**:
+    - `deploy-docker-ssh-env`: Final coordination step
+    - `deploy`: Overall deployment completion
 
 ### Step Dependencies
 

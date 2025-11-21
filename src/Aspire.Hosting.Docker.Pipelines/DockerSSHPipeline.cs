@@ -48,7 +48,6 @@ internal class DockerSSHPipeline(
     private string RemoteDeployPath => _remoteDeployPath ?? throw new InvalidOperationException("Remote deploy path not initialized. Ensure SSH connection step has completed.");
     private Dictionary<string, string> ImageTags => _imageTags ?? throw new InvalidOperationException("Image tags not initialized. Ensure push images step has completed.");
     private RegistryConfiguration RegistryConfig => _registryConfig ?? throw new InvalidOperationException("Registry configuration not initialized. Ensure configure registry step has completed.");
-    private string DashboardServiceName => _dashboardServiceName ?? throw new InvalidOperationException("Dashboard service name not initialized. Ensure deploy step has completed.");
 
     public DockerComposeEnvironmentResource DockerComposeEnvironment { get; } = dockerComposeEnvironmentResource;
 
@@ -56,61 +55,86 @@ internal class DockerSSHPipeline(
 
     public IEnumerable<PipelineStep> CreateSteps(PipelineStepFactoryContext context)
     {
-        // Base prerequisite step
+        // Input gathering steps that must complete before any building/deploying
+        // Strategy: Declare RequiredBy(WellKnownPipelineSteps.BuildPrereq) so build steps automatically wait for config
+        // This creates: our steps → build-prereq → builds
+
+        // Verifies Docker is available locally
         var prereqs = new PipelineStep { Name = $"ssh-prereq-{DockerComposeEnvironment.Name}", Action = CheckPrerequisitesConcurrently };
+        prereqs.RequiredBy(WellKnownPipelineSteps.BuildPrereq);
 
-        // Step sequence mirroring the logical deployment flow
-        var configureRegistry = new PipelineStep { Name = $"configure-registry-{DockerComposeEnvironment.Name}", Action = ConfigureRegistryStep };
-
-        var pushImages = new PipelineStep { Name = $"push-images-{DockerComposeEnvironment.Name}", Action = PushImagesStep, DependsOnSteps = [$"prepare-{DockerComposeEnvironment.Name}"] };
-        pushImages.DependsOn(configureRegistry);
-
-        // Single step to establish SSH connection (prompt + connect)
+        // Establish SSH connection and gather SSH credentials (runs in parallel with registry config)
         var establishSsh = new PipelineStep { Name = $"establish-ssh-{DockerComposeEnvironment.Name}", Action = EstablishSSHConnectionStep };
+        establishSsh.RequiredBy(WellKnownPipelineSteps.BuildPrereq);
 
+        // Gather registry configuration (runs in parallel with SSH)
+        var configureRegistry = new PipelineStep { Name = $"configure-registry-{DockerComposeEnvironment.Name}", Action = ConfigureRegistryStep };
+        configureRegistry.RequiredBy(WellKnownPipelineSteps.BuildPrereq);
+
+        // Configure deployment path (depends on SSH being established)
         var configureDeployment = new PipelineStep { Name = $"configure-deployment-{DockerComposeEnvironment.Name}", Action = ConfigureDeploymentStep };
         configureDeployment.DependsOn(establishSsh);
+        configureDeployment.RequiredBy(WellKnownPipelineSteps.BuildPrereq);
 
+        // Prepare remote environment (depends on deployment being configured)
         var prepareRemote = new PipelineStep { Name = $"prepare-remote-{DockerComposeEnvironment.Name}", Action = PrepareRemoteEnvironmentStep };
         prepareRemote.DependsOn(configureDeployment);
 
+        // Push images (depends on prepare step which builds images, registry config, and remote being ready)
+        var pushImages = new PipelineStep { Name = $"push-images-{DockerComposeEnvironment.Name}", Action = PushImagesStep, DependsOnSteps = [$"prepare-{DockerComposeEnvironment.Name}"] };
+        pushImages.DependsOn(configureRegistry);
+        pushImages.DependsOn(prepareRemote); // Don't push until we know remote is ready
+
+        // Merge environment file (depends on both prepare and push completing)
         var mergeEnv = new PipelineStep { Name = $"merge-environment-{DockerComposeEnvironment.Name}", Action = MergeEnvironmentFileStep, DependsOnSteps = [$"prepare-{DockerComposeEnvironment.Name}"] };
-        mergeEnv.DependsOn(prepareRemote);
         mergeEnv.DependsOn(pushImages);
 
+        // Transfer files (depends on environment being merged)
         var transferFiles = new PipelineStep { Name = $"transfer-files-{DockerComposeEnvironment.Name}", Action = TransferDeploymentFilesPipelineStep };
         transferFiles.DependsOn(mergeEnv);
 
+        // Deploy (depends on files being transferred)
         var deploy = new PipelineStep { Name = $"remote-docker-deploy-{DockerComposeEnvironment.Name}", Action = DeployApplicationStep };
         deploy.DependsOn(transferFiles);
 
-        // Post-deploy: Extract dashboard login token from logs
+        // Extract dashboard login token from logs
         var extractDashboardToken = new PipelineStep { Name = $"extract-dashboard-token-{DockerComposeEnvironment.Name}", Action = ExtractDashboardLoginTokenStep };
         extractDashboardToken.DependsOn(deploy);
 
-        // Final cleanup step to close SSH/SCP connections
+        // Cleanup SSH/SCP connections
         var cleanup = new PipelineStep { Name = $"cleanup-ssh-{DockerComposeEnvironment.Name}", Action = CleanupSSHConnectionStep };
         cleanup.DependsOn(extractDashboardToken);
 
+        // Final coordination step
         var deploySshStep = new PipelineStep { Name = $"deploy-docker-ssh-{DockerComposeEnvironment.Name}", Action = context => Task.CompletedTask };
         deploySshStep.DependsOn(cleanup);
         deploySshStep.RequiredBy(WellKnownPipelineSteps.Deploy);
 
-        return [prereqs, configureRegistry, pushImages, establishSsh, configureDeployment, prepareRemote, mergeEnv, transferFiles, deploy, extractDashboardToken, cleanup, deploySshStep];
+        return [prereqs, establishSsh, configureRegistry, configureDeployment, prepareRemote, pushImages, mergeEnv, transferFiles, deploy, extractDashboardToken, cleanup, deploySshStep];
     }
 
     public Task ConfigurePipelineAsync(PipelineConfigurationContext context)
     {
         var dockerComposeUpStep = context.Steps.FirstOrDefault(s => s.Name == $"docker-compose-up-{DockerComposeEnvironment.Name}");
-
         var deployStep = context.Steps.FirstOrDefault(s => s.Name == WellKnownPipelineSteps.Deploy);
+        var prepareStep = context.Steps.FirstOrDefault(s => s.Name == $"prepare-{DockerComposeEnvironment.Name}");
 
         // Remove docker compose up from the deployment pipeline
         // not needed for SSH deployment
         deployStep?.DependsOnSteps.Remove($"docker-compose-up-{DockerComposeEnvironment.Name}");
         dockerComposeUpStep?.RequiredBySteps.Remove(WellKnownPipelineSteps.Deploy);
 
-        // No additional configuration needed at this time
+        // Make the built-in prepare step depend on our prerequisites check
+        // This ensures Docker is available before building images
+        prepareStep?.DependsOnSteps.Add($"ssh-prereq-{DockerComposeEnvironment.Name}");
+
+        // Note: We elegantly chain dependencies without directly modifying build steps!
+        // The chain works like this:
+        //   1. Our config steps declare RequiredBy(WellKnownPipelineSteps.BuildPrereq)
+        //   2. Build steps already depend on build-prereq (from framework)
+        // Result: our config steps → build-prereq → build steps
+        // This ensures all input gathering happens before any building/deploying.
+
         return Task.CompletedTask;
     }
 
