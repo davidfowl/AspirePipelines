@@ -38,16 +38,18 @@ jobs:
 
       - name: Setup SSH key
         run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H ${{ secrets.TARGET_HOST }} >> ~/.ssh/known_hosts
+          mkdir -p ${{ github.workspace }}/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ${{ github.workspace }}/.ssh/id_rsa
+          chmod 600 ${{ github.workspace }}/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.TARGET_HOST }} >> ${{ github.workspace }}/.ssh/known_hosts
 
       - name: Deploy
         run: aspire deploy --log-level debug
         env:
           DockerSSH__TargetHost: ${{ secrets.TARGET_HOST }}
           DockerSSH__SshUsername: ${{ secrets.VPS_USERNAME }}
-          DockerSSH__SshKeyPath: ~/.ssh/id_rsa
+          DockerSSH__SshKeyPath: ${{ github.workspace }}/.ssh/id_rsa
           DockerRegistry__RegistryUrl: ghcr.io
           DockerRegistry__RepositoryPrefix: ${{ github.repository_owner }}
+          PARAMETERS_P: hello
+          PARAMETERS_CACHE_PASSWORD: ${{ secrets.CACHE_PASSWORD }}
