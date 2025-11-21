@@ -52,4 +52,4 @@ jobs:
           DockerRegistry__RegistryUrl: ghcr.io
           DockerRegistry__RepositoryPrefix: ${{ github.repository_owner }}
           Parameters__p: hello
-          Parameters__cache-password: ${{ secrets.CACHE_PASSWORD }}
+          Parameters__cache_password: ${{ secrets.CACHE_PASSWORD }}
