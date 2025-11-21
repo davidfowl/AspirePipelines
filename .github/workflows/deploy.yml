@@ -56,5 +56,5 @@ jobs:
           DockerSSH__SshKeyPath: ${{ github.workspace }}/.ssh/id_rsa
           DockerRegistry__RegistryUrl: ghcr.io
           DockerRegistry__RepositoryPrefix: ${{ github.repository_owner }}
-          PARAMETERS_P: hello
-          PARAMETERS_CACHE_PASSWORD: ${{ secrets.CACHE_PASSWORD }}
+          Parameters__p: hello
+          Parameters__cache-password: ${{ secrets.CACHE_PASSWORD }}

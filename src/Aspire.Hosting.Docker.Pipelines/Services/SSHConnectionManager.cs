@@ -212,11 +212,13 @@ internal class SSHConnectionManager : ISSHConnectionManager
         GC.SuppressFinalize(this);
     }
 
-    private static async Task<SshClient> CreateSSHClientAsync(ConnectionInfo connectionInfo, CancellationToken cancellationToken)
+    private async Task<SshClient> CreateSSHClientAsync(ConnectionInfo connectionInfo, CancellationToken cancellationToken)
     {
         var client = new SshClient(connectionInfo);
 
+        _logger.LogDebug("Connecting SSH client...");
         await client.ConnectAsync(cancellationToken);
+        _logger.LogDebug("SSH client connected");
 
         if (!client.IsConnected)
         {
@@ -227,11 +229,13 @@ internal class SSHConnectionManager : ISSHConnectionManager
         return client;
     }
 
-    private static async Task<ScpClient> CreateSCPClientAsync(ConnectionInfo connectionInfo, CancellationToken cancellationToken)
+    private async Task<ScpClient> CreateSCPClientAsync(ConnectionInfo connectionInfo, CancellationToken cancellationToken)
     {
         var client = new ScpClient(connectionInfo);
 
+        _logger.LogDebug("Connecting SCP client...");
         await client.ConnectAsync(cancellationToken);
+        _logger.LogDebug("SCP client connected");
 
         if (!client.IsConnected)
         {
@@ -246,20 +250,26 @@ internal class SSHConnectionManager : ISSHConnectionManager
     {
         var portInt = int.Parse(port);
 
+        ConnectionInfo connectionInfo;
         if (!string.IsNullOrEmpty(keyPath))
         {
             // Use key-based authentication
             var keyFile = new PrivateKeyFile(keyPath, password ?? "");
-            return new ConnectionInfo(host, portInt, username, new PrivateKeyAuthenticationMethod(username, keyFile));
+            connectionInfo = new ConnectionInfo(host, portInt, username, new PrivateKeyAuthenticationMethod(username, keyFile));
         }
         else if (!string.IsNullOrEmpty(password))
         {
             // Use password authentication
-            return new ConnectionInfo(host, portInt, username, new PasswordAuthenticationMethod(username, password));
+            connectionInfo = new ConnectionInfo(host, portInt, username, new PasswordAuthenticationMethod(username, password));
         }
         else
         {
             throw new InvalidOperationException("Either SSH password or SSH private key path must be provided");
         }
+
+        // Increase timeout for slower connections
+        connectionInfo.Timeout = TimeSpan.FromMinutes(3);
+
+        return connectionInfo;
     }
 }
