@@ -8,6 +8,7 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment: Digital Ocean
     permissions:
       contents: read
       packages: write
