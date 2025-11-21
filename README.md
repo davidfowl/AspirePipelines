@@ -19,9 +19,15 @@ Install from NuGet:
 dotnet add package Aspire.Hosting.Docker.SshDeploy
 ```
 
-Or use preview builds from GitHub Packages by adding a NuGet source:
+Or use preview builds from GitHub Packages:
 ```bash
+# Using gh cli for authentication
+dotnet nuget add source https://nuget.pkg.github.com/davidfowl/index.json --name github --username $(gh api user --jq .login) --password $(gh auth token)
+
+# Or manually with a GitHub token
 dotnet nuget add source https://nuget.pkg.github.com/davidfowl/index.json --name github --username YOUR_USERNAME --password YOUR_GITHUB_TOKEN
+
+# Then install the package
 dotnet add package Aspire.Hosting.Docker.SshDeploy --prerelease
 ```
 
