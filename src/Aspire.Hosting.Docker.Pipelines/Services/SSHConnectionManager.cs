@@ -38,6 +38,22 @@ internal class SSHConnectionManager : ISSHConnectionManager
 
         try
         {
+            _logger.LogDebug("SSH connection details: Username={Username}, Port={Port}, KeyPath={KeyPath}, HasPassword={HasPassword}",
+                context.SshUsername,
+                context.SshPort,
+                string.IsNullOrEmpty(context.SshKeyPath) ? "(none)" : "(configured)",
+                !string.IsNullOrEmpty(context.SshPassword));
+
+            if (!string.IsNullOrEmpty(context.SshKeyPath))
+            {
+                var keyExists = File.Exists(context.SshKeyPath);
+                _logger.LogDebug("SSH key file exists: {KeyExists}, Path: {KeyPath}", keyExists, context.SshKeyPath);
+                if (!keyExists)
+                {
+                    _logger.LogError("SSH key file not found at path: {KeyPath}", context.SshKeyPath);
+                }
+            }
+
             _logger.LogDebug("Creating SSH and SCP connections...");
 
             var connectionInfo = CreateConnectionInfo(
