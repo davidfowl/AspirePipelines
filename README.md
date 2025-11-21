@@ -85,6 +85,25 @@ var pushImages = new PipelineStep {
 pushImages.DependsOn(configureRegistry);
 ```
 
+## CI/CD with GitHub Actions
+
+See `.github/workflows/deploy.yml` for a complete example. Key points:
+
+- Uses GitHub Container Registry (ghcr.io) with built-in `GITHUB_TOKEN`
+- Configuration via environment variables (e.g., `DockerSSH__TargetHost`, `Parameters__p`)
+- Secrets for sensitive values (`TARGET_HOST`, `SSH_PRIVATE_KEY`, `CACHE_PASSWORD`)
+
+```yaml
+- name: Deploy
+  run: aspire deploy
+  env:
+    DockerSSH__TargetHost: ${{ secrets.TARGET_HOST }}
+    DockerSSH__SshKeyPath: ${{ github.workspace }}/.ssh/id_rsa
+    DockerRegistry__RegistryUrl: ghcr.io
+    DockerRegistry__RepositoryPrefix: ${{ github.repository_owner }}
+    Parameters__p: hello
+```
+
 ## Sample Project
 
 See `samples/DockerPipelinesSample` for a complete example:
