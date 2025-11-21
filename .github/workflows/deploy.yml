@@ -43,13 +43,8 @@ jobs:
           chmod 600 ${{ github.workspace }}/.ssh/id_rsa
           ssh-keyscan -H ${{ secrets.TARGET_HOST }} >> ${{ github.workspace }}/.ssh/known_hosts
 
-      - name: Verify SSH connectivity
-        run: |
-          echo "Testing SSH connection..."
-          ssh -i ${{ github.workspace }}/.ssh/id_rsa -o StrictHostKeyChecking=no -o BatchMode=yes ${{ secrets.VPS_USERNAME }}@${{ secrets.TARGET_HOST }} "echo 'SSH connection successful'" || echo "SSH connection failed"
-
       - name: Deploy
-        run: aspire deploy --log-level debug
+        run: aspire deploy
         env:
           DockerSSH__TargetHost: ${{ secrets.TARGET_HOST }}
           DockerSSH__SshUsername: ${{ secrets.VPS_USERNAME }}
