@@ -1,0 +1,19 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Aspire.Hosting" Version="13.0.0" />
+    <PackageReference Include="Aspire.Hosting.Docker" Version="13.0.0-preview.1.25560.3" />
+    <PackageReference Include="SSH.NET" Version="2025.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Aspire.Hosting.Docker.SshDeploy.Tests" />
+  </ItemGroup>
+
+</Project>

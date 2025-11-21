@@ -12,6 +12,19 @@ This sample showcases how to build custom deployment pipelines for Aspire using 
 - Interactive configuration prompts
 - Progress reporting via `IReportingStep`
 
+## Installation
+
+Install from NuGet:
+```bash
+dotnet add package Aspire.Hosting.Docker.SshDeploy
+```
+
+Or use preview builds from GitHub Packages by adding a NuGet source:
+```bash
+dotnet nuget add source https://nuget.pkg.github.com/davidfowl/index.json --name github --username YOUR_USERNAME --password YOUR_GITHUB_TOKEN
+dotnet add package Aspire.Hosting.Docker.SshDeploy --prerelease
+```
+
 ## Quick Start
 
 ```csharp
