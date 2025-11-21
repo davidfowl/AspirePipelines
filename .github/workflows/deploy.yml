@@ -8,14 +8,15 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Validate required secrets
         run: |
           missing=""
-          [ -z "${{ secrets.VPS_HOST }}" ] && missing="$missing VPS_HOST"
+          [ -z "${{ secrets.TARGET_HOST }}" ] && missing="$missing TARGET_HOST"
           [ -z "${{ secrets.SSH_PRIVATE_KEY }}" ] && missing="$missing SSH_PRIVATE_KEY"
-          [ -z "${{ secrets.REGISTRY_URL }}" ] && missing="$missing REGISTRY_URL"
-          [ -z "${{ secrets.REGISTRY_PREFIX }}" ] && missing="$missing REGISTRY_PREFIX"
           if [ -n "$missing" ]; then
             echo "::error::Missing required secrets:$missing"
             exit 1
@@ -31,20 +32,21 @@ jobs:
       - name: Install Aspire CLI
         run: curl -sSL https://aspire.dev/install.sh | bash
 
+      - name: Login to GitHub Container Registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
       - name: Setup SSH key
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H ${{ secrets.TARGET_HOST }} >> ~/.ssh/known_hosts
 
       - name: Deploy
         run: aspire deploy --log-level debug
         env:
-          DockerSSH__TargetHost: ${{ secrets.VPS_HOST }}
+          DockerSSH__TargetHost: ${{ secrets.TARGET_HOST }}
           DockerSSH__SshUsername: ${{ secrets.VPS_USERNAME }}
           DockerSSH__SshKeyPath: ~/.ssh/id_rsa
-          DockerRegistry__RegistryUrl: ${{ secrets.REGISTRY_URL }}
-          DockerRegistry__RepositoryPrefix: ${{ secrets.REGISTRY_PREFIX }}
-          DockerRegistry__RegistryUsername: ${{ secrets.REGISTRY_USERNAME }}
-          DockerRegistry__RegistryPassword: ${{ secrets.REGISTRY_PASSWORD }}
+          DockerRegistry__RegistryUrl: ghcr.io
+          DockerRegistry__RepositoryPrefix: ${{ github.repository_owner }}
