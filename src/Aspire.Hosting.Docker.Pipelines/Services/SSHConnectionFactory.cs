@@ -301,8 +301,8 @@ internal class SSHConnectionFactory
         };
 
         var result = await interactionService.PromptInputsAsync(
-            $"SSH Configuration for {targetHost}",
-            $"Please provide the SSH configuration details for connecting to {targetHost}.\n",
+            "SSH Configuration",
+            "Please provide the SSH configuration details for the target server.\n",
             inputs);
 
         if (result.Canceled)

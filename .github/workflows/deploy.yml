@@ -1,0 +1,50 @@
+name: Deploy to VPS
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate required secrets
+        run: |
+          missing=""
+          [ -z "${{ secrets.VPS_HOST }}" ] && missing="$missing VPS_HOST"
+          [ -z "${{ secrets.SSH_PRIVATE_KEY }}" ] && missing="$missing SSH_PRIVATE_KEY"
+          [ -z "${{ secrets.REGISTRY_URL }}" ] && missing="$missing REGISTRY_URL"
+          [ -z "${{ secrets.REGISTRY_PREFIX }}" ] && missing="$missing REGISTRY_PREFIX"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required secrets:$missing"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install Aspire CLI
+        run: curl -sSL https://aspire.dev/install.sh | bash
+
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Deploy
+        run: aspire deploy --log-level debug
+        env:
+          DockerSSH__TargetHost: ${{ secrets.VPS_HOST }}
+          DockerSSH__SshUsername: ${{ secrets.VPS_USERNAME }}
+          DockerSSH__SshKeyPath: ~/.ssh/id_rsa
+          DockerRegistry__RegistryUrl: ${{ secrets.REGISTRY_URL }}
+          DockerRegistry__RepositoryPrefix: ${{ secrets.REGISTRY_PREFIX }}
+          DockerRegistry__RegistryUsername: ${{ secrets.REGISTRY_USERNAME }}
+          DockerRegistry__RegistryPassword: ${{ secrets.REGISTRY_PASSWORD }}

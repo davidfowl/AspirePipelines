@@ -499,4 +499,30 @@ internal static class PortInformationUtility
 
         return prefix;
     }
+
+    /// <summary>
+    /// Masks the host in URLs, replacing with a custom domain or "***" if not provided.
+    /// </summary>
+    public static Dictionary<string, List<string>> MaskUrlHosts(
+        Dictionary<string, List<string>> serviceUrls,
+        string? customDomain)
+    {
+        var masked = new Dictionary<string, List<string>>();
+        foreach (var (service, urls) in serviceUrls)
+        {
+            masked[service] = urls.Select(url => MaskUrlHost(url, customDomain)).ToList();
+        }
+        return masked;
+    }
+
+    private static string MaskUrlHost(string url, string? customDomain)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            return url;
+        }
+
+        var replacement = string.IsNullOrEmpty(customDomain) ? "***" : customDomain;
+        return $"{uri.Scheme}://{replacement}:{uri.Port}{uri.PathAndQuery}".TrimEnd('/');
+    }
 }
