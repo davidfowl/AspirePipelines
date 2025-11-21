@@ -2,6 +2,16 @@
 
 Deploy Aspire applications to remote hosts via SSH with a single command.
 
+## Overview
+
+This sample showcases how to build custom deployment pipelines for Aspire using the pipeline framework. The pipeline extends Docker Compose's built-in `prepare` step to push images to a registry and deploy them to remote servers via SSH.
+
+**Key concepts demonstrated:**
+- Step-based pipeline design with dependencies
+- Integration with built-in Aspire pipeline steps
+- Interactive configuration prompts
+- Progress reporting via `IReportingStep`
+
 ## Quick Start
 
 ```csharp
@@ -32,7 +42,7 @@ aspire deploy
 
 ## Configuration
 
-Configure via `appsettings.json` or interactive prompts:
+Configuration is optional - the pipeline will prompt for any missing values. Pre-configure via `appsettings.json` to skip prompts:
 
 ```json
 {
