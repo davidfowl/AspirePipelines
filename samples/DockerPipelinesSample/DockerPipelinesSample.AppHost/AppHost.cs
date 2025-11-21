@@ -12,12 +12,24 @@ var apiService = builder.AddProject<Projects.DockerPipelinesSample_ApiService>("
     .WithHttpHealthCheck("/health")
     .WithEnvironment("P_ENV", p);
 
-builder.AddProject<Projects.DockerPipelinesSample_Web>("webfrontend")
-    .WithExternalHttpEndpoints()
+var frontend = builder.AddProject<Projects.DockerPipelinesSample_Web>("webfrontend")
     .WithHttpHealthCheck("/health")
     .WithReference(cache)
     .WaitFor(cache)
     .WithReference(apiService)
     .WaitFor(apiService);
+
+var yarp = builder.AddYarp("gateway")
+      .WithExternalHttpEndpoints()
+      .WithConfiguration(c =>
+      {
+          c.AddRoute(frontend);
+      });
+
+if (builder.ExecutionContext.IsPublishMode)
+{
+    // In publish mode, expose YARP on port 80
+    yarp.WithHostPort(80);
+}
 
 builder.Build().Run();
