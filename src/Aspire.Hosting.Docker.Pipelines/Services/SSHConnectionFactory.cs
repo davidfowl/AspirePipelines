@@ -116,6 +116,31 @@ internal class SSHConnectionFactory
             };
         }
 
+        // Check if prompting is available
+        if (!interactionService.IsAvailable)
+        {
+            var missing = new List<ConfigurationRequirement>();
+            if (string.IsNullOrEmpty(targetHost)) missing.Add(new(SshContextKey, nameof(SSHConnectionContext.TargetHost)));
+            if (string.IsNullOrEmpty(sshPassword) && string.IsNullOrEmpty(sshKeyPath))
+            {
+                missing.Add(new(SshContextKey, $"{nameof(SSHConnectionContext.SshKeyPath)} or {nameof(SSHConnectionContext.SshPassword)}"));
+            }
+            if (missing.Count > 0)
+            {
+                throw new ConfigurationRequiredException(SshContextKey, missing);
+            }
+
+            // Use defaults for optional values
+            return new SSHConnectionContext
+            {
+                TargetHost = targetHost!,
+                SshUsername = sshUsername ?? "root",
+                SshPassword = string.IsNullOrEmpty(sshPassword) ? null : sshPassword,
+                SshKeyPath = string.IsNullOrEmpty(sshKeyPath) ? null : sshKeyPath,
+                SshPort = sshPort ?? "22"
+            };
+        }
+
         // Discover SSH configuration
         var sshConfig = _sshConfigurationDiscovery.DiscoverSSHConfiguration(context);
 

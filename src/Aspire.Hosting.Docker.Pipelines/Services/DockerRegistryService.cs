@@ -75,6 +75,17 @@ internal class DockerRegistryService
             return registryConfig;
         }
 
+        // Check if prompting is available
+        if (!interactionService.IsAvailable)
+        {
+            var missing = new List<ConfigurationRequirement>();
+            if (string.IsNullOrEmpty(configuration[$"{RegistryContextKey}:RegistryUrl"]))
+                missing.Add(new(RegistryContextKey, "RegistryUrl"));
+            if (string.IsNullOrEmpty(configuration[$"{RegistryContextKey}:RepositoryPrefix"]))
+                missing.Add(new(RegistryContextKey, "RepositoryPrefix"));
+            throw new ConfigurationRequiredException(RegistryContextKey, missing);
+        }
+
         // Prompt user for configuration
         registryConfig = await PromptForRegistryConfigurationAsync(interactionService, configuration, cancellationToken);
 

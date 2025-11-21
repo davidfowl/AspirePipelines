@@ -14,6 +14,7 @@ using Microsoft.Extensions.Logging;
 using Aspire.Hosting.Docker.Pipelines.Models;
 using Aspire.Hosting.Pipelines;
 using Aspire.Hosting.Docker;
+using Aspire.Hosting.Docker.Pipelines;
 using RegistryConfiguration = Aspire.Hosting.Docker.Pipelines.Services.RegistryConfiguration;
 
 internal class DockerSSHPipeline(
@@ -183,6 +184,14 @@ internal class DockerSSHPipeline(
         {
             var appName = _hostEnvironment.ApplicationName.ToLowerInvariant();
             var defaultPath = $"/opt/{appName}";
+
+            // Use default if prompting isn't available
+            if (!interactionService.IsAvailable)
+            {
+                _remoteDeployPath = defaultPath;
+                await step.SucceedAsync($"Deployment configured: {_remoteDeployPath}");
+                return;
+            }
 
             var inputs = new InteractionInput[]
             {
