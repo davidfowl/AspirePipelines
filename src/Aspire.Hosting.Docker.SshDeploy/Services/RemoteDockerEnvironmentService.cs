@@ -39,7 +39,7 @@ internal class RemoteDockerEnvironmentService : IRemoteDockerEnvironmentService
 
         // Check Docker daemon is running
         var dockerInfoCheck = await _sshConnectionManager.ExecuteCommandWithOutputAsync(
-            "docker info --format '{{.ServerVersion}}' 2>/dev/null",
+            "sudo -S docker info --format '{{.ServerVersion}}' 2>/dev/null",
             cancellationToken);
 
         if (dockerInfoCheck.ExitCode != 0)
@@ -95,7 +95,7 @@ internal class RemoteDockerEnvironmentService : IRemoteDockerEnvironmentService
         _logger.LogDebug("Preparing deployment directory: {DeployPath}", deployPath);
 
         await _sshConnectionManager.ExecuteCommandAsync(
-            $"mkdir -p {deployPath}",
+            $"sudo -S mkdir -p {deployPath}",
             cancellationToken);
 
         _logger.LogDebug("Deployment directory prepared: {DeployPath}", deployPath);
