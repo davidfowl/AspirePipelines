@@ -70,7 +70,7 @@ internal class RemoteEnvironmentService : IRemoteEnvironmentService
             // Ensure the remote directory exists
             _logger.LogDebug("Ensuring remote directory exists: {RemoteDeployPath}", remoteDeployPath);
             await _sshConnectionManager.ExecuteCommandAsync(
-                $"mkdir -p '{remoteDeployPath}'",
+                $"sudo -S mkdir -p '{remoteDeployPath}'",
                 cancellationToken);
 
             // Transfer environment file
