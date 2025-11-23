@@ -88,7 +88,7 @@ internal class SSHConfigurationDiscovery
             }
         }
 
-        config.DefaultDeployPath = $"/opt/{appName}";
+        config.DefaultDeployPath = $"~/aspire/apps/{appName}";
         return config;
     }
 
