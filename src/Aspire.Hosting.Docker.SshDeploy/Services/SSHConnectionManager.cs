@@ -188,9 +188,8 @@ internal class SSHConnectionManager : ISSHConnectionManager
         }
         catch (Exception ex)
         {
-            var username = _scpClient?.ConnectionInfo?.Username ?? "unknown";
-            _logger.LogError("File transfer failed for {LocalPath} to {RemotePath} using username '{Username}': {Message}", 
-                localPath, remotePath, username, ex.Message);
+            _logger.LogError("File transfer failed for {LocalPath} to {RemotePath}: {Message}", 
+                localPath, remotePath, ex.Message);
             throw new InvalidOperationException($"File transfer failed for {localPath}: {ex.Message}", ex);
         }
     }
