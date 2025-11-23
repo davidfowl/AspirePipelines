@@ -161,12 +161,36 @@ internal class SSHConnectionManager : ISSHConnectionManager
                 throw new InvalidOperationException("SCP connection not established");
             }
 
+            // Generate a unique temp file name
+            var tempFileName = Path.GetFileName(remotePath) + $".{Guid.NewGuid():N}";
+            var tempPath = $"/tmp/{tempFileName}";
+
+            _logger.LogDebug("Uploading file to temp location: {TempPath}", tempPath);
+
+            // Upload to temp directory
             using var fileStream = File.OpenRead(localPath);
-            await Task.Run(() => _scpClient.Upload(fileStream, remotePath), cancellationToken);
+            await Task.Run(() => _scpClient.Upload(fileStream, tempPath), cancellationToken);
+            
+            _logger.LogDebug("File uploaded to temp location, moving to destination with sudo");
+
+            // Move from temp to destination using sudo
+            var moveCommand = $"sudo mv '{tempPath}' '{remotePath}'";
+            var result = await ExecuteCommandWithOutputAsync(moveCommand, cancellationToken);
+
+            if (result.ExitCode != 0)
+            {
+                _logger.LogError("Failed to move file from {TempPath} to {RemotePath}: {Error}",
+                    tempPath, remotePath, result.Error);
+                throw new InvalidOperationException($"Failed to move file to destination: {result.Error}");
+            }
+
             _logger.LogDebug("File transfer completed successfully");
         }
         catch (Exception ex)
         {
+            var username = _scpClient?.ConnectionInfo?.Username ?? "unknown";
+            _logger.LogError("File transfer failed for {LocalPath} to {RemotePath} using username '{Username}': {Message}", 
+                localPath, remotePath, username, ex.Message);
             throw new InvalidOperationException($"File transfer failed for {localPath}: {ex.Message}", ex);
         }
     }
