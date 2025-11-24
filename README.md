@@ -76,7 +76,7 @@ Configuration is optional - the pipeline will prompt for any missing values. Pre
     "RepositoryPrefix": "your-docker-username"
   },
   "Deployment": {
-    "RemoteDeployPath": "/opt/your-app"
+    "RemoteDeployPath": "$HOME/aspire/apps/your-app"
   }
 }
 ```
