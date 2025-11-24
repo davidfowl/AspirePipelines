@@ -151,6 +151,33 @@ internal class DockerSSHPipeline(
         }
         context.Logger.LogDebug("SSH connection cleanup completed");
     }
+
+    private async Task<string> ExpandTildeInPathAsync(string path, ILogger logger, CancellationToken cancellationToken)
+    {
+        if (!path.StartsWith("~"))
+        {
+            return path;
+        }
+
+        logger.LogDebug("Expanding ~ in remote deploy path: {Path}", path);
+        var homeResult = await _sshConnectionManager!.ExecuteCommandWithOutputAsync("echo $HOME", cancellationToken);
+        
+        if (homeResult.ExitCode != 0)
+        {
+            throw new InvalidOperationException($"Failed to expand home directory: {homeResult.Error}");
+        }
+
+        var homeDir = homeResult.Output.Trim();
+        if (string.IsNullOrEmpty(homeDir))
+        {
+            throw new InvalidOperationException("Failed to retrieve home directory from remote server");
+        }
+
+        var expandedPath = path.Replace("~", homeDir);
+        logger.LogDebug("Expanded remote deploy path: {Path}", expandedPath);
+        
+        return expandedPath;
+    }
     #endregion
 
     #region Pipeline Step Implementations
@@ -179,6 +206,14 @@ internal class DockerSSHPipeline(
         var deploymentSection = _configuration.GetSection("Deployment");
         _remoteDeployPath = deploymentSection["RemoteDeployPath"];
 
+        // Expand ~ if loaded from configuration
+        if (!string.IsNullOrEmpty(_remoteDeployPath))
+        {
+            _remoteDeployPath = await ExpandTildeInPathAsync(_remoteDeployPath, context.Logger, context.CancellationToken);
+            await step.SucceedAsync($"Deployment configured: {_remoteDeployPath}");
+            return;
+        }
+
         // Prompt if not configured
         if (string.IsNullOrEmpty(_remoteDeployPath))
         {
@@ -188,7 +223,7 @@ internal class DockerSSHPipeline(
             // Use default if prompting isn't available
             if (!interactionService.IsAvailable)
             {
-                _remoteDeployPath = defaultPath;
+                _remoteDeployPath = await ExpandTildeInPathAsync(defaultPath, context.Logger, context.CancellationToken);
                 await step.SucceedAsync($"Deployment configured: {_remoteDeployPath}");
                 return;
             }
@@ -217,6 +252,7 @@ internal class DockerSSHPipeline(
             }
 
             _remoteDeployPath = result.Data["remoteDeployPath"].Value ?? throw new InvalidOperationException("Remote deployment path is required");
+            _remoteDeployPath = await ExpandTildeInPathAsync(_remoteDeployPath, context.Logger, context.CancellationToken);
 
             // Persist the deployment path
             try
