@@ -143,7 +143,7 @@ public class ConfigurationTests
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["DockerSSH:SshHost"] = "ssh-host.com",
-                ["Deployment:RemoteDeployPath"] = "~/aspire/apps/myapp"
+                ["Deployment:RemoteDeployPath"] = "$HOME/aspire/apps/myapp"
             })
             .Build();
 
@@ -153,7 +153,7 @@ public class ConfigurationTests
 
         // Assert
         Assert.Equal("ssh-host.com", sshHost);
-        Assert.Equal("~/aspire/apps/myapp", deployPath);
+        Assert.Equal("$HOME/aspire/apps/myapp", deployPath);
     }
 
     [Fact]

@@ -183,7 +183,7 @@ internal class DockerSSHPipeline(
         if (string.IsNullOrEmpty(_remoteDeployPath))
         {
             var appName = _hostEnvironment.ApplicationName.ToLowerInvariant();
-            var defaultPath = $"~/aspire/apps/{appName}";
+            var defaultPath = $"$HOME/aspire/apps/{appName}";
 
             // Use default if prompting isn't available
             if (!interactionService.IsAvailable)
