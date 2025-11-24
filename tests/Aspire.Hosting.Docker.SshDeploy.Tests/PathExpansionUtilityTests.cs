@@ -150,7 +150,8 @@ public class PathExpansionUtilityTests
     [Fact]
     public void ExpandTildeToHome_DoesNotExpand_TildeWithoutSlash()
     {
-        // Arrange - ~username style paths are not supported, only ~/ or ~
+        // Arrange - ~username style paths are intentionally not supported
+        // This implementation only expands ~ and ~/ patterns to $HOME
         var path = "~user/app";
 
         // Act

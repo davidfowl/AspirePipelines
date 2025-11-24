@@ -28,7 +28,7 @@ internal static class PathExpansionUtility
         // If path starts with ~/, replace with $HOME/
         if (path.StartsWith("~/"))
         {
-            return "$HOME" + path.Substring(1);
+            return $"$HOME{path.Substring(1)}";
         }
 
         // If path is exactly ~, replace with $HOME
