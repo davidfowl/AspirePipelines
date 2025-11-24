@@ -115,7 +115,7 @@ public class PathExpansionUtilityTests
         string? path = null;
 
         // Act
-        var result = PathExpansionUtility.ExpandTildeToHome(path!);
+        var result = PathExpansionUtility.ExpandTildeToHome(path);
 
         // Assert
         Assert.Null(result);

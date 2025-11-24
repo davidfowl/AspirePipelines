@@ -18,7 +18,7 @@ internal static class PathExpansionUtility
     /// - "/opt/app" -> "/opt/app" (unchanged)
     /// - "$HOME/app" -> "$HOME/app" (unchanged)
     /// </remarks>
-    public static string ExpandTildeToHome(string path)
+    public static string? ExpandTildeToHome(string? path)
     {
         if (string.IsNullOrEmpty(path))
         {
