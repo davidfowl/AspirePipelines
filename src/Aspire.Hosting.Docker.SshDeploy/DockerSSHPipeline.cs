@@ -178,6 +178,12 @@ internal class DockerSSHPipeline(
         // Try to load from configuration/state first
         var deploymentSection = _configuration.GetSection("Deployment");
         _remoteDeployPath = deploymentSection["RemoteDeployPath"];
+        
+        // Expand tilde to $HOME if present
+        if (!string.IsNullOrEmpty(_remoteDeployPath))
+        {
+            _remoteDeployPath = PathExpansionUtility.ExpandTildeToHome(_remoteDeployPath);
+        }
 
         // Prompt if not configured
         if (string.IsNullOrEmpty(_remoteDeployPath))
@@ -217,6 +223,9 @@ internal class DockerSSHPipeline(
             }
 
             _remoteDeployPath = result.Data["remoteDeployPath"].Value ?? throw new InvalidOperationException("Remote deployment path is required");
+            
+            // Expand tilde to $HOME if present
+            _remoteDeployPath = PathExpansionUtility.ExpandTildeToHome(_remoteDeployPath);
 
             // Persist the deployment path
             try
