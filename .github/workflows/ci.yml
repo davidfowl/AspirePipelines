@@ -10,17 +10,20 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-
-    - uses: dotnet/nbgv@v0.4.2
-      with:
-        setAllVars: true
 
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
         dotnet-version: '10.0.x'
+
+    - name: Compute version suffix
+      id: version
+      shell: pwsh
+      run: |
+        $SHORT_SHA = "${{ github.sha }}".Substring(0,8)
+        $VERSION_SUFFIX = "ci.g$SHORT_SHA"
+        Write-Host "Computed VERSION_SUFFIX=$VERSION_SUFFIX"
+        "VERSION_SUFFIX=$VERSION_SUFFIX" | Out-File -FilePath $Env:GITHUB_OUTPUT -Append -Encoding utf8
 
     - name: dotnet build
       run: dotnet build -c Release
@@ -29,7 +32,7 @@ jobs:
       run: dotnet test -c Release --no-build
 
     - name: dotnet pack
-      run: dotnet pack -c Release --no-build
+      run: dotnet pack -c Release --no-build -p:VersionSuffix=${{ steps.version.outputs.VERSION_SUFFIX }}
 
     - name: Push to feedz.io
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
