@@ -1,0 +1,36 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - uses: dotnet/nbgv@v0.4.2
+      with:
+        setAllVars: true
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '10.0.x'
+
+    - name: dotnet build
+      run: dotnet build -c Release
+
+    - name: dotnet test
+      run: dotnet test -c Release --no-build
+
+    - name: dotnet pack
+      run: dotnet pack -c Release --no-build
+
+    - name: Push to feedz.io
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      run: dotnet nuget push ./artifacts/*.nupkg -s https://f.feedz.io/davidfowl/aspire/nuget/index.json -k ${{ secrets.FEEDZ_TOKEN }} --skip-duplicate
