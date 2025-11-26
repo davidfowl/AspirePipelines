@@ -14,22 +14,19 @@ This sample showcases how to build custom deployment pipelines for Aspire using 
 
 ## Installation
 
-Install from NuGet:
+Add the CI build feed and install the package:
+
 ```bash
-dotnet add package Aspire.Hosting.Docker.SshDeploy
-```
+# Add the feedz.io source
+dotnet nuget add source https://f.feedz.io/davidfowl/aspire/nuget/index.json --name davidfowl-aspire
 
-Or use preview builds from GitHub Packages:
-```bash
-# Using gh cli for authentication
-dotnet nuget add source https://nuget.pkg.github.com/davidfowl/index.json --name github --username $(gh api user --jq .login) --password $(gh auth token)
-
-# Or manually with a GitHub token
-dotnet nuget add source https://nuget.pkg.github.com/davidfowl/index.json --name github --username YOUR_USERNAME --password YOUR_GITHUB_TOKEN
-
-# Then install the package
+# Install the package
 dotnet add package Aspire.Hosting.Docker.SshDeploy --prerelease
 ```
+
+CI builds are automatically published on every push to main and use the version format `0.1.0-ci.<build-number>+<branch>.<sha>`.
+
+> **Note:** Stable releases will be published to NuGet.org when available.
 
 ## Quick Start
 

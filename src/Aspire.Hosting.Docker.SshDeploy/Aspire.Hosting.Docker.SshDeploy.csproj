@@ -8,6 +8,14 @@
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <IncludeSourceRevisionInInformationalVersion>true</IncludeSourceRevisionInInformationalVersion>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
+
+    <!-- Package metadata -->
+    <Description>Deploy .NET Aspire applications to remote Docker hosts via SSH. Build custom deployment pipelines with step-based design, interactive configuration, and progress reporting.</Description>
+    <PackageTags>aspire;docker;ssh;deployment;pipeline;docker-compose;devops</PackageTags>
+    <PackageProjectUrl>https://github.com/davidfowl/AspirePipelines</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/davidfowl/AspirePipelines</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
   </PropertyGroup>
 
   <ItemGroup>
