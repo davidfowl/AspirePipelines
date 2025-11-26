@@ -94,8 +94,9 @@ internal class RemoteDockerEnvironmentService : IRemoteDockerEnvironmentService
     {
         _logger.LogDebug("Preparing deployment directory: {DeployPath}", deployPath);
 
+        // Use double quotes to allow shell variable expansion (e.g., $HOME)
         await _sshConnectionManager.ExecuteCommandAsync(
-            $"mkdir -p {deployPath}",
+            $"mkdir -p \"{deployPath}\"",
             cancellationToken);
 
         _logger.LogDebug("Deployment directory prepared: {DeployPath}", deployPath);
@@ -107,9 +108,9 @@ internal class RemoteDockerEnvironmentService : IRemoteDockerEnvironmentService
     {
         _logger.LogDebug("Checking deployment state in: {DeployPath}", deployPath);
 
-        // Check if there are any existing containers
+        // Check if there are any existing containers (use double quotes for variable expansion)
         var existingContainersCheck = await _sshConnectionManager.ExecuteCommandWithOutputAsync(
-            $"cd {deployPath} 2>/dev/null && (docker compose ps -q 2>/dev/null || docker-compose ps -q 2>/dev/null) | wc -l || echo '0'",
+            $"cd \"{deployPath}\" 2>/dev/null && (docker compose ps -q 2>/dev/null || docker-compose ps -q 2>/dev/null) | wc -l || echo '0'",
             cancellationToken);
 
         var containerCountStr = existingContainersCheck.Output?.Trim() ?? "0";

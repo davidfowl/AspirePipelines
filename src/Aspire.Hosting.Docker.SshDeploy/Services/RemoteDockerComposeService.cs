@@ -23,8 +23,9 @@ internal class RemoteDockerComposeService : IRemoteDockerComposeService
     {
         _logger.LogDebug("Stopping containers in {DeployPath}", deployPath);
 
+        // Use double quotes to allow shell variable expansion (e.g., $HOME)
         var result = await _sshConnectionManager.ExecuteCommandWithOutputAsync(
-            $"cd {deployPath} && (docker compose down || docker-compose down || true)",
+            $"cd \"{deployPath}\" && (docker compose down || docker-compose down || true)",
             cancellationToken);
 
         _logger.LogDebug(
@@ -42,8 +43,9 @@ internal class RemoteDockerComposeService : IRemoteDockerComposeService
     {
         _logger.LogDebug("Pulling images in {DeployPath}", deployPath);
 
+        // Use double quotes to allow shell variable expansion (e.g., $HOME)
         var result = await _sshConnectionManager.ExecuteCommandWithOutputAsync(
-            $"cd {deployPath} && (docker compose pull || docker-compose pull || true)",
+            $"cd \"{deployPath}\" && (docker compose pull || docker-compose pull || true)",
             cancellationToken);
 
         _logger.LogDebug(
@@ -61,8 +63,9 @@ internal class RemoteDockerComposeService : IRemoteDockerComposeService
     {
         _logger.LogDebug("Starting containers in {DeployPath}", deployPath);
 
+        // Use double quotes to allow shell variable expansion (e.g., $HOME)
         var result = await _sshConnectionManager.ExecuteCommandWithOutputAsync(
-            $"cd {deployPath} && (docker compose up -d || docker-compose up -d)",
+            $"cd \"{deployPath}\" && (docker compose up -d || docker-compose up -d)",
             cancellationToken);
 
         if (result.ExitCode != 0)
@@ -89,8 +92,9 @@ internal class RemoteDockerComposeService : IRemoteDockerComposeService
     {
         _logger.LogDebug("Getting logs from {DeployPath}, tail={TailLines}", deployPath, tailLines);
 
+        // Use double quotes to allow shell variable expansion (e.g., $HOME)
         var result = await _sshConnectionManager.ExecuteCommandWithOutputAsync(
-            $"cd {deployPath} && (docker compose logs --tail={tailLines} || docker-compose logs --tail={tailLines} || true)",
+            $"cd \"{deployPath}\" && (docker compose logs --tail={tailLines} || docker-compose logs --tail={tailLines} || true)",
             cancellationToken);
 
         _logger.LogDebug("Retrieved {Length} characters of logs", result.Output.Length);

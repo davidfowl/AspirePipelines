@@ -67,9 +67,10 @@ internal class RemoteFileService : IRemoteFileService
     {
         _logger.LogDebug("Getting file info for {RemotePath}", remotePath);
 
+        // Use double quotes to allow shell variable expansion (e.g., $HOME)
         // Try to get detailed file information using ls -la
         var lsResult = await _sshConnectionManager.ExecuteCommandWithOutputAsync(
-            $"ls -la '{remotePath}' 2>/dev/null || echo 'FILE_NOT_FOUND'",
+            $"ls -la \"{remotePath}\" 2>/dev/null || echo 'FILE_NOT_FOUND'",
             cancellationToken);
 
         if (lsResult.ExitCode != 0 || lsResult.Output.Contains("FILE_NOT_FOUND"))
@@ -89,9 +90,9 @@ internal class RemoteFileService : IRemoteFileService
             return new RemoteFileInfo(remotePath, remoteSize, true);
         }
 
-        // Fallback: just check if file exists
+        // Fallback: just check if file exists (use double quotes for variable expansion)
         var existsResult = await _sshConnectionManager.ExecuteCommandWithOutputAsync(
-            $"test -f '{remotePath}' && echo 'EXISTS' || echo 'NOT_FOUND'",
+            $"test -f \"{remotePath}\" && echo 'EXISTS' || echo 'NOT_FOUND'",
             cancellationToken);
 
         if (existsResult.Output.Trim() == "EXISTS")
