@@ -1,5 +1,7 @@
 # Aspire Docker SSH Deployment Pipeline
 
+[![feedz.io](https://img.shields.io/badge/endpoint.svg?url=https%3A%2F%2Ff.feedz.io%2Fdavidfowl%2Faspire%2Fshield%2FAspire.Hosting.Docker.SshDeploy%2Flatest&label=Aspire.Hosting.Docker.SshDeploy)](https://f.feedz.io/davidfowl/aspire/packages/Aspire.Hosting.Docker.SshDeploy/latest/download)
+
 Deploy Aspire applications to remote hosts via SSH with a single command.
 
 ## Overview
