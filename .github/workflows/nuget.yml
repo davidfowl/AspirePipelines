@@ -1,13 +1,16 @@
-name: Publish to NuGet
+name: Release
 
 on:
-  workflow_dispatch:
-  release:
-    types: [published]
+  push:
+    tags:
+      - 'v*'
 
 jobs:
-  publish:
+  release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
     steps:
       - uses: actions/checkout@v4
 
@@ -18,10 +21,21 @@ jobs:
 
       - name: Get version from tag
         id: version
-        run: echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+        shell: pwsh
+        run: |
+          $TAG = "${{ github.ref_name }}"
+          $VERSION = $TAG -replace '^v', ''
+          Write-Host "Release version: $VERSION"
+          "VERSION=$VERSION" | Out-File -FilePath $Env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      - name: Pack
-        run: dotnet pack src/Aspire.Hosting.Docker.SshDeploy/Aspire.Hosting.Docker.SshDeploy.csproj -c Release -o ./artifacts -p:Version=${{ steps.version.outputs.version }}
+      - name: dotnet build
+        run: dotnet build -c Release
+
+      - name: dotnet test
+        run: dotnet test -c Release --no-build
+
+      - name: dotnet pack
+        run: dotnet pack -c Release --no-build -p:Version=${{ steps.version.outputs.VERSION }}
 
       - name: Push to NuGet
         run: dotnet nuget push ./artifacts/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
