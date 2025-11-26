@@ -20,8 +20,9 @@ jobs:
       id: version
       shell: pwsh
       run: |
-        $SHORT_SHA = "${{ github.sha }}".Substring(0,8)
-        $VERSION_SUFFIX = "ci.g$SHORT_SHA"
+        $SHORT_SHA = "${{ github.sha }}".Substring(0,7)
+        $BUILD_NUMBER = "${{ github.run_number }}"
+        $VERSION_SUFFIX = "ci.$BUILD_NUMBER+g$SHORT_SHA"
         Write-Host "Computed VERSION_SUFFIX=$VERSION_SUFFIX"
         "VERSION_SUFFIX=$VERSION_SUFFIX" | Out-File -FilePath $Env:GITHUB_OUTPUT -Append -Encoding utf8
 
