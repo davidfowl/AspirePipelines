@@ -44,7 +44,7 @@ jobs:
           ssh-keyscan -H ${{ secrets.TARGET_HOST }} >> ${{ github.workspace }}/.ssh/known_hosts
 
       - name: Deploy
-        run: aspire deploy
+        run: aspire deploy --log-level debug
         env:
           DockerSSH__TargetHost: ${{ secrets.TARGET_HOST }}
           DockerSSH__SshUsername: ${{ secrets.VPS_USERNAME }}
