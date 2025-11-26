@@ -174,9 +174,19 @@ internal class FakeSSHConnectionManager : ISSHConnectionManager
 
     private (int exitCode, string output, string error) GetCommandResult(string command)
     {
+        // Check for exact match first
         if (_commandResults.TryGetValue(command, out var result))
         {
             return result;
+        }
+
+        // Handle echo commands for path expansion (used by TransferFileAsync)
+        if (command.StartsWith("echo \""))
+        {
+            var path = command.Substring(6, command.Length - 7); // Remove 'echo "' and trailing '"'
+            // Simulate shell variable expansion
+            var expandedPath = path.Replace("$HOME", "/home/testuser");
+            return (0, expandedPath, "");
         }
 
         return _defaultCommandResult;

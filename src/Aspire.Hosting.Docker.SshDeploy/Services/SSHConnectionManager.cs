@@ -161,14 +161,33 @@ internal class SSHConnectionManager : ISSHConnectionManager
                 throw new InvalidOperationException("SCP connection not established");
             }
 
+            // Expand shell variables in the remote path before transferring
+            // SCP doesn't expand variables like $HOME, so we need to resolve them first
+            var expandedPath = await ExpandRemotePathAsync(remotePath, cancellationToken);
+            _logger.LogDebug("Expanded remote path from {RemotePath} to {ExpandedPath}", remotePath, expandedPath);
+
             using var fileStream = File.OpenRead(localPath);
-            await Task.Run(() => _scpClient.Upload(fileStream, remotePath), cancellationToken);
+            await Task.Run(() => _scpClient.Upload(fileStream, expandedPath), cancellationToken);
             _logger.LogDebug("File transfer completed successfully");
         }
         catch (Exception ex)
         {
             throw new InvalidOperationException($"File transfer failed for {localPath}: {ex.Message}", ex);
         }
+    }
+
+    private async Task<string> ExpandRemotePathAsync(string remotePath, CancellationToken cancellationToken)
+    {
+        // Use echo to expand shell variables and resolve the path
+        var result = await ExecuteCommandWithOutputAsync($"echo \"{remotePath}\"", cancellationToken);
+
+        if (result.ExitCode != 0 || string.IsNullOrWhiteSpace(result.Output))
+        {
+            _logger.LogWarning("Failed to expand remote path {RemotePath}, using original path", remotePath);
+            return remotePath;
+        }
+
+        return result.Output.Trim();
     }
 
     public async Task DisconnectAsync()
