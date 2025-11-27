@@ -11,10 +11,8 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Aspire.Hosting.Docker.SshDeploy.Models;
 using Aspire.Hosting.Pipelines;
 using Aspire.Hosting.Docker;
-using Aspire.Hosting.Docker.SshDeploy;
 using RegistryConfiguration = Aspire.Hosting.Docker.SshDeploy.Services.RegistryConfiguration;
 
 internal class DockerSSHPipeline(
