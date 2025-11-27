@@ -4,6 +4,7 @@
 
 using Aspire.Hosting.Docker.SshDeploy.Abstractions;
 using Aspire.Hosting.Docker.SshDeploy.Models;
+using Aspire.Hosting.Docker.SshDeploy.Utilities;
 using Aspire.Hosting.Pipelines;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -145,7 +146,7 @@ internal class SSHConnectionFactory
         var sshConfig = _sshConfigurationDiscovery.DiscoverSSHConfiguration(context);
 
         // Prompt for configuration
-        targetHost ??= await PromptForTargetHostAsync(interactionService);
+        targetHost ??= await PromptForTargetHostAsync(interactionService, configuration);
         var sshKeyOptions = BuildSshKeyOptions(sshConfig);
         sshKeyPath ??= await PromptForSshKeyPathAsync(interactionService, sshKeyOptions, configuration, sshConfig, _fileSystem);
         var sshDetails = await PromptForSshDetailsAsync(interactionService, targetHost, sshKeyPath, configuration, sshConfig);
@@ -203,15 +204,21 @@ internal class SSHConnectionFactory
         return sshKeyOptions;
     }
 
-    private static async Task<string> PromptForTargetHostAsync(IInteractionService interactionService)
+    private static async Task<string> PromptForTargetHostAsync(IInteractionService interactionService, IConfiguration configuration)
     {
+        // For prompts, we use SecretText by default since we don't know yet if it's an IP or domain
+        // Only show as plain text if UNSAFE_SHOW_TARGET_HOST=true/1 is explicitly set
+        var unsafeShowHost = configuration["UNSAFE_SHOW_TARGET_HOST"];
+        var forceShow = string.Equals(unsafeShowHost, "true", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(unsafeShowHost, "1", StringComparison.Ordinal);
+
         var inputs = new InteractionInput[]
         {
             new() {
                 Name = "targetHost",
                 Required = true,
-                InputType = InputType.Text,
-                Label = "Target Server Host"
+                InputType = forceShow ? InputType.Text : InputType.SecretText,
+                Label = "Target Server Host/IP"
             }
         };
 

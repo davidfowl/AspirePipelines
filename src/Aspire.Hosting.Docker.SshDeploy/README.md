@@ -116,6 +116,19 @@ export DockerSSH__SshKeyPath=~/.ssh/id_ed25519
 export DockerRegistry__RegistryUrl=ghcr.io
 ```
 
+### Target Host Privacy
+
+By default, IP addresses are treated as sensitive and masked in output:
+- **Domain names** (e.g., `deploy.example.com`) → Shown in URLs
+- **IP addresses** (e.g., `192.168.1.100`) → Masked as `***` in URLs
+
+To force showing IP addresses in output:
+```bash
+export UNSAFE_SHOW_TARGET_HOST=true
+```
+
+This behavior protects against accidentally exposing server IP addresses in logs or CI output.
+
 ## How It Works
 
 1. **Build** - Creates container images locally

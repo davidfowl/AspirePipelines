@@ -439,20 +439,13 @@ internal class DockerSSHPipeline(
             kvp => kvp.Key,
             kvp => new List<string> { kvp.Value });
 
-        // Mask hosts in non-interactive mode unless TARGET_DOMAIN or UNSAFE_SHOW_TARGET_HOST is set
-        var interactionService = context.Services.GetRequiredService<IInteractionService>();
-        if (!interactionService.IsAvailable)
+        // Mask IP addresses in URLs by default for security
+        // Domain names are shown, IPs are masked unless UNSAFE_SHOW_TARGET_HOST=true/1
+        var targetHost = _sshConnectionManager?.SshClient?.ConnectionInfo?.Host;
+        if (!PortInformationUtility.CanShowTargetHost(_configuration, targetHost))
         {
-            var unsafeShowHost = string.Equals(_configuration["UNSAFE_SHOW_TARGET_HOST"], "true", StringComparison.OrdinalIgnoreCase);
-            if (!unsafeShowHost)
-            {
-                var targetDomain = _configuration["TARGET_DOMAIN"];
-                if (string.IsNullOrEmpty(targetDomain))
-                {
-                    context.Logger.LogWarning("TARGET_DOMAIN not set. Service URLs will not display the host. Set TARGET_DOMAIN to show a custom domain, or UNSAFE_SHOW_TARGET_HOST=true to show the IP address.");
-                }
-                serviceUrlsForTable = PortInformationUtility.MaskUrlHosts(serviceUrlsForTable, targetDomain);
-            }
+            context.Logger.LogWarning("Target host is an IP address and will be masked. Set UNSAFE_SHOW_TARGET_HOST=true to show the IP address, or use a domain name instead.");
+            serviceUrlsForTable = PortInformationUtility.MaskUrlHosts(serviceUrlsForTable, customDomain: null);
         }
 
         var serviceTable = PortInformationUtility.FormatServiceUrlsAsTable(serviceUrlsForTable);
