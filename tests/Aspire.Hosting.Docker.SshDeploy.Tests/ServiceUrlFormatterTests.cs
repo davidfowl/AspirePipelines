@@ -3,7 +3,7 @@ using Microsoft.Extensions.Configuration;
 
 namespace Aspire.Hosting.Docker.SshDeploy.Tests;
 
-public class PortInformationUtilityTests
+public class ServiceUrlFormatterTests
 {
     // Tests for IsIpAddress
 
@@ -17,7 +17,7 @@ public class PortInformationUtilityTests
     [InlineData("fe80::1")]
     public void IsIpAddress_ReturnsTrue_ForIpAddresses(string host)
     {
-        Assert.True(PortInformationUtility.IsIpAddress(host));
+        Assert.True(ServiceUrlFormatter.IsIpAddress(host));
     }
 
     [Theory]
@@ -28,7 +28,7 @@ public class PortInformationUtilityTests
     [InlineData("server-01")]
     public void IsIpAddress_ReturnsFalse_ForDomainNames(string host)
     {
-        Assert.False(PortInformationUtility.IsIpAddress(host));
+        Assert.False(ServiceUrlFormatter.IsIpAddress(host));
     }
 
     // Tests for CanShowTargetHost
@@ -37,14 +37,14 @@ public class PortInformationUtilityTests
     public void CanShowTargetHost_ReturnsFalse_WhenHostIsNull()
     {
         var config = new ConfigurationBuilder().Build();
-        Assert.False(PortInformationUtility.CanShowTargetHost(config, null));
+        Assert.False(ServiceUrlFormatter.CanShowTargetHost(config, null));
     }
 
     [Fact]
     public void CanShowTargetHost_ReturnsFalse_WhenHostIsEmpty()
     {
         var config = new ConfigurationBuilder().Build();
-        Assert.False(PortInformationUtility.CanShowTargetHost(config, ""));
+        Assert.False(ServiceUrlFormatter.CanShowTargetHost(config, ""));
     }
 
     [Fact]
@@ -52,7 +52,7 @@ public class PortInformationUtilityTests
     {
         // IP addresses are masked by default
         var config = new ConfigurationBuilder().Build();
-        Assert.False(PortInformationUtility.CanShowTargetHost(config, "192.168.1.100"));
+        Assert.False(ServiceUrlFormatter.CanShowTargetHost(config, "192.168.1.100"));
     }
 
     [Fact]
@@ -60,7 +60,7 @@ public class PortInformationUtilityTests
     {
         // Domain names are shown
         var config = new ConfigurationBuilder().Build();
-        Assert.True(PortInformationUtility.CanShowTargetHost(config, "myapp.example.com"));
+        Assert.True(ServiceUrlFormatter.CanShowTargetHost(config, "myapp.example.com"));
     }
 
     [Theory]
@@ -78,7 +78,7 @@ public class PortInformationUtilityTests
             })
             .Build();
 
-        Assert.True(PortInformationUtility.CanShowTargetHost(config, "192.168.1.100"));
+        Assert.True(ServiceUrlFormatter.CanShowTargetHost(config, "192.168.1.100"));
     }
 
     [Theory]
@@ -96,7 +96,7 @@ public class PortInformationUtilityTests
             })
             .Build();
 
-        Assert.False(PortInformationUtility.CanShowTargetHost(config, "192.168.1.100"));
+        Assert.False(ServiceUrlFormatter.CanShowTargetHost(config, "192.168.1.100"));
     }
 
     [Fact]
@@ -104,7 +104,7 @@ public class PortInformationUtilityTests
     {
         // Domain names are shown without any env var
         var config = new ConfigurationBuilder().Build();
-        Assert.True(PortInformationUtility.CanShowTargetHost(config, "deploy.mycompany.com"));
+        Assert.True(ServiceUrlFormatter.CanShowTargetHost(config, "deploy.mycompany.com"));
     }
 
     [Fact]
@@ -112,6 +112,6 @@ public class PortInformationUtilityTests
     {
         // localhost is not an IP, so it's shown
         var config = new ConfigurationBuilder().Build();
-        Assert.True(PortInformationUtility.CanShowTargetHost(config, "localhost"));
+        Assert.True(ServiceUrlFormatter.CanShowTargetHost(config, "localhost"));
     }
 }

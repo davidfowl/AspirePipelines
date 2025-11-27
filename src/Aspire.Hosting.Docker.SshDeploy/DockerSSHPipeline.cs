@@ -5,6 +5,7 @@
 
 using Aspire.Hosting;
 using Aspire.Hosting.Docker.SshDeploy.Abstractions;
+using Aspire.Hosting.Docker.SshDeploy.Models;
 using Aspire.Hosting.Docker.SshDeploy.Services;
 using Aspire.Hosting.Docker.SshDeploy.Utilities;
 using Microsoft.Extensions.Configuration;
@@ -280,14 +281,27 @@ internal class DockerSSHPipeline(
     private async Task DeployApplicationStep(PipelineStepContext context)
     {
         var step = context.ReportingStep;
-        var deploymentInfo = await DeployOnRemoteServer(context, RemoteDeployPath, ImageTags, step, RemoteOperationsFactory, context.CancellationToken);
+        var status = await DeployOnRemoteServer(context, RemoteDeployPath, ImageTags, step, RemoteOperationsFactory, context.CancellationToken);
 
-        // Log the detailed service table to information level
-        context.Logger.LogInformation("{DeploymentInfo}", deploymentInfo);
+        // Format and log the service URLs table
+        var targetHost = _sshConnectionManager?.SshClient?.ConnectionInfo?.Host
+            ?? throw new InvalidOperationException("SSH connection not established");
+        var serviceUrlsForTable = status.ServiceUrls.ToDictionary(
+            kvp => kvp.Key,
+            kvp => new List<string> { kvp.Value });
 
-        // Use a simple success message for the task
-        var deploymentStatus = await RemoteOperationsFactory.DeploymentMonitorService.GetStatusAsync(RemoteDeployPath, context.CancellationToken);
-        await step.SucceedAsync($"Application deployed successfully! Services running: {deploymentStatus.HealthyServices} of {deploymentStatus.TotalServices} containers healthy.");
+        // Mask IP addresses in URLs by default for security
+        if (!ServiceUrlFormatter.CanShowTargetHost(_configuration, targetHost))
+        {
+            context.Logger.LogWarning("Target host is an IP address and will be masked. Set UNSAFE_SHOW_TARGET_HOST=true to show the IP address, or use a domain name instead.");
+            serviceUrlsForTable = ServiceUrlFormatter.MaskUrlHosts(serviceUrlsForTable, customDomain: null);
+        }
+
+        var serviceTable = ServiceUrlFormatter.FormatServiceUrlsAsTable(serviceUrlsForTable);
+        context.Logger.LogInformation("Services running: {HealthyServices} of {TotalServices} containers healthy.\n{ServiceTable}",
+            status.HealthyServices, status.TotalServices, serviceTable);
+
+        await step.SucceedAsync($"Application deployed successfully! Services running: {status.HealthyServices} of {status.TotalServices} containers healthy.");
     }
     #endregion
 
@@ -388,7 +402,7 @@ internal class DockerSSHPipeline(
         await copyTask.SucceedAsync($"✓ {dockerComposeFile} verified ({transferResult.BytesTransferred} bytes)", cancellationToken: cancellationToken);
     }
 
-    private async Task<string> DeployOnRemoteServer(PipelineStepContext context, string deployPath, Dictionary<string, string> imageTags, IReportingStep step, RemoteOperationsFactory factory, CancellationToken cancellationToken)
+    private async Task<ComposeStatus> DeployOnRemoteServer(PipelineStepContext context, string deployPath, Dictionary<string, string> imageTags, IReportingStep step, RemoteOperationsFactory factory, CancellationToken cancellationToken)
     {
         // Stop existing containers
         await using var stopTask = await step.CreateTaskAsync("Stopping existing containers", cancellationToken);
@@ -425,32 +439,20 @@ internal class DockerSSHPipeline(
         var startResult = await factory.DockerComposeService.StartAsync(deployPath, cancellationToken);
         await startTask.SucceedAsync("New containers started", cancellationToken: cancellationToken);
 
+        // Get target host for URLs
+        var targetHost = _sshConnectionManager?.SshClient?.ConnectionInfo?.Host
+            ?? throw new InvalidOperationException("SSH connection not established");
+
         // Monitor service health with real-time reporting
-        await factory.DeploymentMonitorService.MonitorServiceHealthAsync(deployPath, step, cancellationToken);
+        await HealthCheckUtility.CheckServiceHealth(deployPath, targetHost, factory.DockerComposeService, step, context.Logger, cancellationToken);
 
-        // Get deployment status with health info and URLs
-        var deploymentStatus = await factory.DeploymentMonitorService.GetStatusAsync(deployPath, cancellationToken);
+        // Get final deployment status
+        var status = await factory.DockerComposeService.GetStatusAsync(deployPath, targetHost, cancellationToken);
 
-        _dashboardServiceName = deploymentStatus.ServiceUrls.Keys.FirstOrDefault(
+        _dashboardServiceName = status.ServiceUrls.Keys.FirstOrDefault(
             s => s.Contains(DockerComposeEnvironment.Name + "-dashboard", StringComparison.OrdinalIgnoreCase));
 
-        // Format port information as a nice table
-        var serviceUrlsForTable = deploymentStatus.ServiceUrls.ToDictionary(
-            kvp => kvp.Key,
-            kvp => new List<string> { kvp.Value });
-
-        // Mask IP addresses in URLs by default for security
-        // Domain names are shown, IPs are masked unless UNSAFE_SHOW_TARGET_HOST=true/1
-        var targetHost = _sshConnectionManager?.SshClient?.ConnectionInfo?.Host;
-        if (!PortInformationUtility.CanShowTargetHost(_configuration, targetHost))
-        {
-            context.Logger.LogWarning("Target host is an IP address and will be masked. Set UNSAFE_SHOW_TARGET_HOST=true to show the IP address, or use a domain name instead.");
-            serviceUrlsForTable = PortInformationUtility.MaskUrlHosts(serviceUrlsForTable, customDomain: null);
-        }
-
-        var serviceTable = PortInformationUtility.FormatServiceUrlsAsTable(serviceUrlsForTable);
-
-        return $"Services running: {deploymentStatus.HealthyServices} of {deploymentStatus.TotalServices} containers healthy.\n{serviceTable}";
+        return status;
     }
 
     public async ValueTask DisposeAsync()

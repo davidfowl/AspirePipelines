@@ -1,4 +1,7 @@
+using System.Runtime.CompilerServices;
+using System.Text.Json;
 using Aspire.Hosting.Docker.SshDeploy.Abstractions;
+using Aspire.Hosting.Docker.SshDeploy.Models;
 using Microsoft.Extensions.Logging;
 
 namespace Aspire.Hosting.Docker.SshDeploy.Services;
@@ -10,6 +13,7 @@ internal class RemoteDockerComposeService : IRemoteDockerComposeService
 {
     private readonly ISSHConnectionManager _sshConnectionManager;
     private readonly ILogger<RemoteDockerComposeService> _logger;
+    private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 
     public RemoteDockerComposeService(
         ISSHConnectionManager sshConnectionManager,
@@ -100,5 +104,75 @@ internal class RemoteDockerComposeService : IRemoteDockerComposeService
         _logger.LogDebug("Retrieved {Length} characters of logs", result.Output.Length);
 
         return result.Output;
+    }
+
+    public async Task<ComposeStatus> GetStatusAsync(string deployPath, string host, CancellationToken cancellationToken)
+    {
+        _logger.LogDebug("Getting service status from {DeployPath}", deployPath);
+
+        // Use double quotes to allow shell variable expansion (e.g., $HOME)
+        var result = await _sshConnectionManager.ExecuteCommandWithOutputAsync(
+            $"cd \"{deployPath}\" && docker compose ps --format json",
+            cancellationToken);
+
+        var services = new List<ComposeServiceInfo>();
+
+        if (result.ExitCode == 0 && !string.IsNullOrEmpty(result.Output))
+        {
+            // docker compose ps --format json outputs NDJSON (one JSON object per line)
+            foreach (var line in result.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                try
+                {
+                    var service = JsonSerializer.Deserialize<ComposeServiceInfo>(line, JsonOptions);
+                    if (service != null)
+                    {
+                        services.Add(service);
+                    }
+                }
+                catch (JsonException ex)
+                {
+                    _logger.LogDebug(ex, "Failed to parse JSON line: {Line}", line);
+                }
+            }
+        }
+        else
+        {
+            _logger.LogWarning("Failed to get service status (exit code {ExitCode}): {Error}", result.ExitCode, result.Error);
+        }
+
+        // Build service URLs from published ports
+        var serviceUrls = services
+            .Where(s => s.Publishers.Any(p => p.PublishedPort > 0))
+            .ToDictionary(
+                s => s.Service,
+                s => $"http://{host}:{s.Publishers.First(p => p.PublishedPort > 0).PublishedPort}");
+
+        _logger.LogDebug("Found {ServiceCount} services, {UrlCount} with URLs", services.Count, serviceUrls.Count);
+
+        return new ComposeStatus(
+            Services: services,
+            TotalServices: services.Count,
+            HealthyServices: services.Count(s => s.IsHealthy),
+            UnhealthyServices: services.Count(s => !s.IsHealthy),
+            ServiceUrls: serviceUrls);
+    }
+
+    public async IAsyncEnumerable<ComposeStatus> StreamStatusAsync(
+        string deployPath,
+        string host,
+        TimeSpan interval,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        using var timer = new PeriodicTimer(interval);
+
+        // Yield initial status immediately
+        yield return await GetStatusAsync(deployPath, host, cancellationToken);
+
+        // Continue yielding at each interval until cancelled
+        while (await timer.WaitForNextTickAsync(cancellationToken))
+        {
+            yield return await GetStatusAsync(deployPath, host, cancellationToken);
+        }
     }
 }

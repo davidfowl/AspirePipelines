@@ -17,7 +17,6 @@ internal class RemoteOperationsFactory
     private IRemoteFileService? _fileService;
     private IRemoteDockerEnvironmentService? _dockerEnvironmentService;
     private IRemoteDockerComposeService? _dockerComposeService;
-    private IRemoteDeploymentMonitorService? _deploymentMonitorService;
     private IRemoteEnvironmentService? _environmentService;
     private IRemoteServiceInspectionService? _serviceInspectionService;
 
@@ -44,9 +43,6 @@ internal class RemoteOperationsFactory
 
     public IRemoteDockerComposeService DockerComposeService =>
         _dockerComposeService ??= new RemoteDockerComposeService(_sshConnectionManager, _loggerFactory.CreateLogger<RemoteDockerComposeService>());
-
-    public IRemoteDeploymentMonitorService DeploymentMonitorService =>
-        _deploymentMonitorService ??= new RemoteDeploymentMonitorService(_sshConnectionManager, _loggerFactory.CreateLogger<RemoteDeploymentMonitorService>());
 
     public IRemoteEnvironmentService EnvironmentService =>
         _environmentService ??= new RemoteEnvironmentService(_sshConnectionManager, _environmentFileReader, _loggerFactory.CreateLogger<RemoteEnvironmentService>());

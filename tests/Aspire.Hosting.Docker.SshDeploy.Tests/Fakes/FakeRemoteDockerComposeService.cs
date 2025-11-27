@@ -1,4 +1,6 @@
+using System.Runtime.CompilerServices;
 using Aspire.Hosting.Docker.SshDeploy.Abstractions;
+using Aspire.Hosting.Docker.SshDeploy.Models;
 
 namespace Aspire.Hosting.Docker.SshDeploy.Tests.Fakes;
 
@@ -111,6 +113,27 @@ internal class FakeRemoteDockerComposeService : IRemoteDockerComposeService
     {
         _operations.Add(new ComposeOperation("GetLogs", deployPath, tailLines));
         return Task.FromResult(_logsOutput);
+    }
+
+    public Task<ComposeStatus> GetStatusAsync(string deployPath, string host, CancellationToken cancellationToken)
+    {
+        _operations.Add(new ComposeOperation("GetStatus", deployPath));
+        return Task.FromResult(new ComposeStatus(
+            Services: new List<ComposeServiceInfo>(),
+            TotalServices: 0,
+            HealthyServices: 0,
+            UnhealthyServices: 0,
+            ServiceUrls: new Dictionary<string, string>()));
+    }
+
+    public async IAsyncEnumerable<ComposeStatus> StreamStatusAsync(
+        string deployPath,
+        string host,
+        TimeSpan interval,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        _operations.Add(new ComposeOperation("StreamStatus", deployPath));
+        yield return await GetStatusAsync(deployPath, host, cancellationToken);
     }
 
     /// <summary>
