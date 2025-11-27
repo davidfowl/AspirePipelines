@@ -449,8 +449,10 @@ internal class DockerSSHPipeline(
         // Get final deployment status
         var status = await factory.DockerComposeService.GetStatusAsync(deployPath, targetHost, cancellationToken);
 
-        _dashboardServiceName = status.ServiceUrls.Keys.FirstOrDefault(
-            s => s.Contains(DockerComposeEnvironment.Name + "-dashboard", StringComparison.OrdinalIgnoreCase));
+        // Find dashboard container name (docker logs needs container name, not service name)
+        var dashboardService = status.Services.FirstOrDefault(
+            s => s.Service.Contains(DockerComposeEnvironment.Name + "-dashboard", StringComparison.OrdinalIgnoreCase));
+        _dashboardServiceName = dashboardService?.Name;
 
         return status;
     }
