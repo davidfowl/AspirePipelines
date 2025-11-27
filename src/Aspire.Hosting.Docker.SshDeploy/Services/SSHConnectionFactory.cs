@@ -278,6 +278,10 @@ internal class SSHConnectionFactory
         var defaultUsername = configuration["DockerSSH:SshUsername"] ?? "root";
         var defaultPort = configuration["DockerSSH:SshPort"] ?? "22";
 
+        // Use appropriate label based on authentication method
+        var usingKeyAuth = !string.IsNullOrEmpty(sshKeyPath);
+        var passwordLabel = usingKeyAuth ? "SSH Key Passphrase (leave empty if key has no passphrase)" : "SSH Password";
+
         var inputs = new InteractionInput[]
         {
             new() {
@@ -290,7 +294,7 @@ internal class SSHConnectionFactory
             new() {
                 Name = "sshPassword",
                 InputType = InputType.SecretText,
-                Label = "SSH Password"
+                Label = passwordLabel
             },
             new() {
                 Name = "sshPort",

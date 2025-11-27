@@ -45,7 +45,7 @@ The pipeline will prompt for missing configuration. Pre-configure via `appsettin
 ```json
 {
   "DockerSSH": {
-    "SshHost": "your-server.com",
+    "TargetHost": "your-server.com",
     "SshUsername": "your-username",
     "SshPort": "22",
     "SshKeyPath": "~/.ssh/id_rsa"
@@ -60,11 +60,59 @@ The pipeline will prompt for missing configuration. Pre-configure via `appsettin
 }
 ```
 
+### SSH Key Path Formats
+
+The `SshKeyPath` supports multiple formats:
+
+```json
+// Tilde expansion (recommended)
+"SshKeyPath": "~/.ssh/id_ed25519"
+
+// $HOME expansion
+"SshKeyPath": "$HOME/.ssh/id_rsa"
+
+// Full absolute path
+"SshKeyPath": "/Users/john/.ssh/id_rsa"
+
+// Just the key name (assumes ~/.ssh/ directory)
+"SshKeyPath": "id_ed25519"
+```
+
+### SSH Authentication
+
+**Key-based authentication (recommended):**
+```json
+{
+  "DockerSSH": {
+    "TargetHost": "your-server.com",
+    "SshUsername": "deploy",
+    "SshKeyPath": "~/.ssh/id_ed25519",
+    "SshPassword": "***"
+  }
+}
+```
+> Note: When using key-based auth, `SshPassword` is the **passphrase** for your private key. Leave empty or omit if your key has no passphrase.
+
+**Password authentication:**
+```json
+{
+  "DockerSSH": {
+    "TargetHost": "your-server.com",
+    "SshUsername": "deploy",
+    "SshPassword": "***"
+  }
+}
+```
+> Note: When not using a key, `SshPassword` is your SSH login password.
+
+### Environment Variables
+
 Or use environment variables:
 
 ```bash
-export DockerSSH__SshHost=your-server.com
+export DockerSSH__TargetHost=your-server.com
 export DockerSSH__SshUsername=your-username
+export DockerSSH__SshKeyPath=~/.ssh/id_ed25519
 export DockerRegistry__RegistryUrl=ghcr.io
 ```
 

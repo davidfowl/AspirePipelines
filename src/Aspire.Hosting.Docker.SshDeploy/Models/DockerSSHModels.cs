@@ -26,9 +26,12 @@ internal class DockerSSHConfiguration
 
 internal class SSHConnectionContext
 {
-    // SSH connection configuration only
     public required string TargetHost { get; set; }
     public required string SshUsername { get; set; }
+    /// <summary>
+    /// When SshKeyPath is set, this is the passphrase for the private key.
+    /// When SshKeyPath is not set, this is the password for SSH password authentication.
+    /// </summary>
     public string? SshPassword { get; set; }
     public string? SshKeyPath { get; set; }
     public required string SshPort { get; set; }
