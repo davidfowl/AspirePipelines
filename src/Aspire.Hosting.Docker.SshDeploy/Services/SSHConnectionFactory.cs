@@ -100,7 +100,7 @@ internal class SSHConnectionFactory
         var sshUsername = section[nameof(SSHConnectionContext.SshUsername)];
         var sshPort = section[nameof(SSHConnectionContext.SshPort)];
         var sshPassword = section[nameof(SSHConnectionContext.SshPassword)];
-        var sshKeyPath = section[nameof(SSHConnectionContext.SshKeyPath)];
+        var sshKeyPath = ResolveSSHKeyPath(section[nameof(SSHConnectionContext.SshKeyPath)], _fileSystem);
 
         if (!string.IsNullOrEmpty(targetHost) &&
             !string.IsNullOrEmpty(sshUsername) &&
@@ -318,14 +318,23 @@ internal class SSHConnectionFactory
     }
 
     /// <summary>
-    /// Resolves SSH key path from configuration. If the path is just a key name (no path separators),
-    /// it assumes the key is in the ~/.ssh directory. Otherwise, returns the path as-is.
+    /// Resolves SSH key path from configuration. Handles:
+    /// - Tilde expansion (~/ to home directory)
+    /// - $HOME environment variable expansion
+    /// - Key names without paths (assumes ~/.ssh directory)
     /// </summary>
     internal static string? ResolveSSHKeyPath(string? configuredKeyPath, IFileSystem fileSystem)
     {
         if (string.IsNullOrEmpty(configuredKeyPath))
         {
             return null;
+        }
+
+        // Expand ~ and $HOME to actual home directory
+        var expandedPath = Utilities.PathExpansionUtility.ExpandToLocalPath(configuredKeyPath);
+        if (expandedPath != configuredKeyPath)
+        {
+            return expandedPath;
         }
 
         // If the path contains directory separators, assume it's a full path

@@ -160,4 +160,114 @@ public class PathExpansionUtilityTests
         // Assert
         Assert.Equal("~user/app", result);
     }
+
+    // Tests for ExpandToLocalPath (local file path expansion)
+
+    [Fact]
+    public void ExpandToLocalPath_ExpandsTildeSlash_ToActualHomeDirectory()
+    {
+        // Arrange
+        var path = "~/.ssh/id_rsa";
+        var expectedHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+        // Act
+        var result = PathExpansionUtility.ExpandToLocalPath(path);
+
+        // Assert
+        Assert.Equal(Path.Combine(expectedHome, ".ssh", "id_rsa"), result);
+    }
+
+    [Fact]
+    public void ExpandToLocalPath_ExpandsJustTilde_ToActualHomeDirectory()
+    {
+        // Arrange
+        var path = "~";
+        var expectedHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+        // Act
+        var result = PathExpansionUtility.ExpandToLocalPath(path);
+
+        // Assert
+        Assert.Equal(expectedHome, result);
+    }
+
+    [Fact]
+    public void ExpandToLocalPath_ExpandsDollarHome_ToActualHomeDirectory()
+    {
+        // Arrange
+        var path = "$HOME/.ssh/id_rsa";
+        var expectedHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+        // Act
+        var result = PathExpansionUtility.ExpandToLocalPath(path);
+
+        // Assert
+        Assert.Equal(Path.Combine(expectedHome, ".ssh", "id_rsa"), result);
+    }
+
+    [Fact]
+    public void ExpandToLocalPath_ExpandsJustDollarHome_ToActualHomeDirectory()
+    {
+        // Arrange
+        var path = "$HOME";
+        var expectedHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+        // Act
+        var result = PathExpansionUtility.ExpandToLocalPath(path);
+
+        // Assert
+        Assert.Equal(expectedHome, result);
+    }
+
+    [Fact]
+    public void ExpandToLocalPath_DoesNotExpand_AbsolutePath()
+    {
+        // Arrange
+        var path = "/Users/john/.ssh/id_rsa";
+
+        // Act
+        var result = PathExpansionUtility.ExpandToLocalPath(path);
+
+        // Assert
+        Assert.Equal("/Users/john/.ssh/id_rsa", result);
+    }
+
+    [Fact]
+    public void ExpandToLocalPath_HandlesNull_ReturnsNull()
+    {
+        // Arrange
+        string? path = null;
+
+        // Act
+        var result = PathExpansionUtility.ExpandToLocalPath(path);
+
+        // Assert
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void ExpandToLocalPath_HandlesEmptyString_ReturnsEmptyString()
+    {
+        // Arrange
+        var path = "";
+
+        // Act
+        var result = PathExpansionUtility.ExpandToLocalPath(path);
+
+        // Assert
+        Assert.Equal("", result);
+    }
+
+    [Fact]
+    public void ExpandToLocalPath_DoesNotExpand_TildeInMiddle()
+    {
+        // Arrange
+        var path = "/path/to/~something/file";
+
+        // Act
+        var result = PathExpansionUtility.ExpandToLocalPath(path);
+
+        // Assert
+        Assert.Equal("/path/to/~something/file", result);
+    }
 }

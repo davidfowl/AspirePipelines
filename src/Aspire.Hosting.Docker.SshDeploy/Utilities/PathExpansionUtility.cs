@@ -1,13 +1,60 @@
 namespace Aspire.Hosting.Docker.SshDeploy.Utilities;
 
 /// <summary>
-/// Provides utilities for expanding path variables to be compatible with remote shell environments.
+/// Provides utilities for expanding path variables for local and remote shell environments.
 /// </summary>
 internal static class PathExpansionUtility
 {
     /// <summary>
+    /// Expands tilde (~) and $HOME in a local path to the actual user profile directory.
+    /// Use this for resolving paths to local files (e.g., SSH keys in configuration).
+    /// </summary>
+    /// <param name="path">The path that may contain ~ or $HOME prefix</param>
+    /// <returns>Path with ~ or $HOME expanded to the actual home directory, or original path if no expansion needed</returns>
+    /// <remarks>
+    /// Examples:
+    /// - "~/.ssh/id_rsa" -> "/Users/john/.ssh/id_rsa"
+    /// - "$HOME/.ssh/id_rsa" -> "/Users/john/.ssh/id_rsa"
+    /// - "/full/path/key" -> "/full/path/key" (unchanged)
+    /// </remarks>
+    // TODO: Support expanding arbitrary environment variables (e.g., $VAR or ${VAR} syntax).
+    // Note: Environment.ExpandEnvironmentVariables uses %VAR% syntax on all platforms,
+    // so we'd need custom parsing for Unix-style $VAR syntax.
+    public static string? ExpandToLocalPath(string? path)
+    {
+        if (string.IsNullOrEmpty(path))
+        {
+            return path;
+        }
+
+        var homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+        // Expand ~ to home directory
+        if (path.StartsWith("~/"))
+        {
+            return Path.Combine(homeDir, path[2..]);
+        }
+        if (path == "~")
+        {
+            return homeDir;
+        }
+
+        // Expand $HOME to home directory
+        if (path.StartsWith("$HOME/"))
+        {
+            return Path.Combine(homeDir, path[6..]);
+        }
+        if (path == "$HOME")
+        {
+            return homeDir;
+        }
+
+        return path;
+    }
+
+    /// <summary>
     /// Expands tilde (~) to $HOME environment variable for better compatibility with SSH/SCP operations.
-    /// This ensures paths work correctly in both interactive and non-interactive shells, as well as SCP transfers.
+    /// Use this for paths that will be executed on a remote shell.
     /// </summary>
     /// <param name="path">The path that may contain tilde (~) prefix</param>
     /// <returns>Path with tilde expanded to $HOME, or original path if no tilde prefix found</returns>
