@@ -1,10 +1,20 @@
+#pragma warning disable ASPIRECOMPUTE001 // WithDeploymentImageTag is experimental
+
+// Sample demonstrating SSH deployment to a remote Docker host with:
+// - Custom image tagging from CI/CD
+// - Optional TLS certificate transfer
+// - YARP reverse proxy with HTTPS
+
 var builder = DistributedApplication.CreateBuilder(args);
 
+// Custom image tag from CI/CD (e.g., IMAGE_TAG_SUFFIX=build.42.abc1234)
+var imageTag = builder.Configuration["IMAGE_TAG_SUFFIX"];
+
+// Configure Docker Compose environment with SSH deployment support
 builder.AddDockerComposeEnvironment("env")
     .WithDashboard(db => db.WithHostPort(8085))
     .WithSshDeploySupport()
-    // This will be skipped if certs does not exist
-    .WithAppFileTransfer("certs", "certs");
+    .WithAppFileTransfer("certs", "certs"); // Skipped if certs folder doesn't exist
 
 var p = builder.AddParameter("p");
 
@@ -27,12 +37,19 @@ var yarp = builder.AddYarp("gateway")
           c.AddRoute(frontend);
       });
 
+// Apply the image tag to all services if specified
+if (!string.IsNullOrEmpty(imageTag))
+{
+    apiService.WithDeploymentImageTag(_ => imageTag);
+    frontend.WithDeploymentImageTag(_ => imageTag);
+    yarp.WithDeploymentImageTag(_ => imageTag);
+}
+
 if (builder.ExecutionContext.IsPublishMode)
 {
-    // In publish mode, expose YARP on port 80
     yarp.WithHostPort(80);
 
-    // Now wire up TLS if the certs exist
+    // Configure HTTPS if TLS certificates exist
     var certPath = Path.Combine(builder.AppHostDirectory, "certs");
 
     if (Directory.Exists(certPath))
@@ -57,11 +74,8 @@ if (builder.ExecutionContext.IsPublishMode)
 
         yarp.WithBindMount("./certs", "/app/certs");
 
-        // Work around being able to use relative paths for the source path
-        yarp.PublishAsDockerComposeService((svc, infra) =>
-        {
-            infra.Volumes[0].Source = "./certs";
-        });
+        // Fix relative path for Docker Compose volume
+        yarp.PublishAsDockerComposeService((svc, infra) => infra.Volumes[0].Source = "./certs");
     }
 
     yarp.WithExternalHttpEndpoints();

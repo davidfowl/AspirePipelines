@@ -109,10 +109,18 @@ internal class DockerRegistryService
     /// <summary>
     /// Tags and pushes container images to the configured registry.
     /// </summary>
+    /// <param name="registryConfig">The registry configuration.</param>
+    /// <param name="outputPath">The output path containing the .env file.</param>
+    /// <param name="environmentName">The environment name.</param>
+    /// <param name="customImageTags">Optional per-service custom image tags (service name -> tag). If not provided for a service, falls back to timestamp-based tag.</param>
+    /// <param name="step">The reporting step for progress updates.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>A dictionary mapping service names to their full image references.</returns>
     public async Task<Dictionary<string, string>> TagAndPushImagesAsync(
         RegistryConfiguration registryConfig,
         string outputPath,
         string environmentName,
+        Dictionary<string, string>? customImageTags,
         IReportingStep step,
         CancellationToken cancellationToken)
     {
@@ -138,11 +146,11 @@ internal class DockerRegistryService
             return imageTags;
         }
 
-        // Generate timestamp-based tag
-        var imageTag = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
+        // Generate default timestamp-based tag for services without custom tags
+        var defaultTag = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
 
         // Tag all images
-        imageTags = await TagImagesAsync(imageVars, registryConfig, imageTag, step, cancellationToken);
+        imageTags = await TagImagesAsync(imageVars, registryConfig, defaultTag, customImageTags, step, cancellationToken);
 
         // Push all images in parallel
         await PushImagesAsync(imageTags, step, cancellationToken);
@@ -251,7 +259,8 @@ internal class DockerRegistryService
     private async Task<Dictionary<string, string>> TagImagesAsync(
         List<KeyValuePair<string, string>> imageVars,
         RegistryConfiguration registryConfig,
-        string imageTag,
+        string defaultTag,
+        Dictionary<string, string>? customImageTags,
         IReportingStep step,
         CancellationToken cancellationToken)
     {
@@ -263,6 +272,11 @@ internal class DockerRegistryService
             var serviceName = envKey.Substring(0, envKey.Length - "_IMAGE".Length).ToLowerInvariant();
 
             await using var tagTask = await step.CreateTaskAsync($"Tagging {serviceName} image", cancellationToken);
+
+            // Use custom tag if provided for this service, otherwise use default
+            var imageTag = customImageTags != null && customImageTags.TryGetValue(serviceName, out var customTag)
+                ? customTag
+                : defaultTag;
 
             // Construct the target image name
             var targetImageName = !string.IsNullOrEmpty(registryConfig.RepositoryPrefix)

@@ -61,6 +61,9 @@ jobs:
           chmod 600 ${{ github.workspace }}/.ssh/id_rsa
           ssh-keyscan -H ${{ secrets.TARGET_HOST }} >> ${{ github.workspace }}/.ssh/known_hosts
 
+      - name: Set short SHA
+        run: echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
+
       - name: Deploy
         run: aspire deploy --log-level debug
         env:
@@ -72,3 +75,5 @@ jobs:
           Parameters__p: hello
           Parameters__cache_password: ${{ secrets.CACHE_PASSWORD }}
           UNSAFE_SHOW_TARGET_HOST: true
+          # Image tag format: build.{run_number}.{short_sha} (e.g., build.42.abc1234)
+          IMAGE_TAG_SUFFIX: build.${{ github.run_number }}.${{ env.SHORT_SHA }}

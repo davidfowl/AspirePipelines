@@ -2,8 +2,10 @@
 #pragma warning disable ASPIREINTERACTION001
 #pragma warning disable ASPIREPIPELINES002
 #pragma warning disable ASPIREPIPELINES004
+#pragma warning disable ASPIRECOMPUTE001
 
 using Aspire.Hosting;
+using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Docker.SshDeploy.Abstractions;
 using Aspire.Hosting.Docker.SshDeploy.Models;
 using Aspire.Hosting.Docker.SshDeploy.Services;
@@ -255,12 +257,50 @@ internal class DockerSSHPipeline(
 
     private async Task PushImagesStep(PipelineStepContext context)
     {
+        // Gather custom image tags from resource annotations
+        var customImageTags = await GetCustomImageTagsAsync(context);
+
         _imageTags = await _dockerRegistryService.TagAndPushImagesAsync(
             RegistryConfig,
             OutputPath,
             _hostEnvironment.EnvironmentName,
+            customImageTags,
             context.ReportingStep,
             context.CancellationToken);
+    }
+
+    /// <summary>
+    /// Gathers custom image tags from DeploymentImageTagCallbackAnnotation on compute resources.
+    /// </summary>
+    private async Task<Dictionary<string, string>?> GetCustomImageTagsAsync(PipelineStepContext context)
+    {
+        Dictionary<string, string>? customTags = null;
+
+        // Only iterate over compute resources (projects, containers, etc.)
+        foreach (var resource in context.Model.GetComputeResources())
+        {
+            // Check if the resource has a DeploymentImageTagCallbackAnnotation
+            if (resource.TryGetLastAnnotation<DeploymentImageTagCallbackAnnotation>(out var annotation))
+            {
+                var callbackContext = new DeploymentImageTagCallbackAnnotationContext
+                {
+                    Resource = resource,
+                    CancellationToken = context.CancellationToken
+                };
+
+                var tag = await annotation.Callback(callbackContext);
+
+                // Only add if tag is not null or empty
+                if (!string.IsNullOrEmpty(tag))
+                {
+                    customTags ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    customTags[resource.Name.ToLowerInvariant()] = tag;
+                    context.Logger.LogDebug("Using custom image tag '{Tag}' for resource '{Resource}'", tag, resource.Name);
+                }
+            }
+        }
+
+        return customTags;
     }
 
     private async Task PrepareRemoteEnvironmentStep(PipelineStepContext context)
