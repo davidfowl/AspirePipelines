@@ -46,8 +46,8 @@ if (builder.ExecutionContext.IsPublishMode)
             context.EnvironmentVariables["Kestrel__Certificates__Default__Path"] = "/app/certs/app.pem";
             context.EnvironmentVariables["Kestrel__Certificates__Default__KeyPath"] = "/app/certs/app.key";
 
-            context.EnvironmentVariables["HTTP_PORTS"] = "80";
-            context.EnvironmentVariables["HTTPS_PORTS"] = "443";
+            context.EnvironmentVariables["HTTP_PORTS"] = yarp.GetEndpoint("http").Property(EndpointProperty.TargetPort);
+            context.EnvironmentVariables["HTTPS_PORTS"] = yarp.GetEndpoint("https").Property(EndpointProperty.TargetPort);
         });
 
         yarp.WithBindMount("./certs", "/app/certs");
