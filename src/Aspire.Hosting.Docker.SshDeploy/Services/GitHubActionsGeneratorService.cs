@@ -289,7 +289,7 @@ internal class GitHubActionsGeneratorService
         sb.AppendLine("        run: echo \"SHORT_SHA=${GITHUB_SHA::7}\" >> $GITHUB_ENV");
         sb.AppendLine();
         sb.AppendLine("      - name: Deploy");
-        sb.AppendLine("        run: aspire deploy");
+        sb.AppendLine($"        run: aspire deploy -e {options.EnvironmentName}");
 
         // Build environment variables section
         sb.AppendLine("        env:");

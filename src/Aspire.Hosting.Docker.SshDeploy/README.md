@@ -188,6 +188,21 @@ This command:
 - Handles SSH authentication automatically
 - Runs `aspire deploy` with environment variables
 
+### Multiple Environments
+
+Deploy to different environments (staging, production, etc.) by using the `-e` flag:
+
+```bash
+aspire do gh-action-env -e staging
+aspire do gh-action-env -e production
+```
+
+This creates separate GitHub environments and workflow files for each:
+- `.github/workflows/deploy-env-staging.yml`
+- `.github/workflows/deploy-env-production.yml`
+
+Each workflow runs `aspire deploy -e {environment}`, allowing your AppHost to customize behavior per environment.
+
 ### Re-running the Command
 
 Running `aspire do gh-action-{name}` again will:
