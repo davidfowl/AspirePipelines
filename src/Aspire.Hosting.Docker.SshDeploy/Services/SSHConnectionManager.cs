@@ -16,6 +16,7 @@ internal class SSHConnectionManager : ISSHConnectionManager
     private readonly ILogger<SSHConnectionManager> _logger;
     private SshClient? _sshClient;
     private ScpClient? _scpClient;
+    private string? _targetHost;
 
     public SSHConnectionManager(ILogger<SSHConnectionManager> logger)
     {
@@ -23,6 +24,8 @@ internal class SSHConnectionManager : ISSHConnectionManager
     }
 
     public bool IsConnected => _sshClient?.IsConnected == true && _scpClient?.IsConnected == true;
+
+    public string? TargetHost => _targetHost;
 
     public SshClient? SshClient => _sshClient;
 
@@ -32,6 +35,9 @@ internal class SSHConnectionManager : ISSHConnectionManager
         CancellationToken cancellationToken)
     {
         _logger.LogDebug("Establishing SSH connection using SSH.NET");
+
+        // Store the original target host for display (before DNS resolution)
+        _targetHost = context.TargetHost;
 
         // Task 1: Establish SSH connection
         await using var connectTask = await step.CreateTaskAsync("Establishing SSH connection", cancellationToken);

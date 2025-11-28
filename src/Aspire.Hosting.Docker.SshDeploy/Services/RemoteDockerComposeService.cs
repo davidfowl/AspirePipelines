@@ -170,6 +170,13 @@ internal class RemoteDockerComposeService : IRemoteDockerComposeService
     {
         // Use HTTPS for well-known secure ports
         var scheme = port is 443 or 8443 ? "https" : "http";
+
+        // Omit default ports (80 for HTTP, 443 for HTTPS)
+        if (port is 80 or 443)
+        {
+            return $"{scheme}://{host}";
+        }
+
         return $"{scheme}://{host}:{port}";
     }
 

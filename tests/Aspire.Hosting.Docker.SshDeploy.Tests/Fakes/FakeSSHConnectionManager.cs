@@ -20,6 +20,7 @@ internal class FakeSSHConnectionManager : ISSHConnectionManager
     private bool _shouldThrowOnConnect;
     private bool _shouldThrowOnCommand;
     private bool _shouldThrowOnTransfer;
+    private string? _targetHost;
 
     /// <summary>
     /// Gets all the SSH operation calls that were made.
@@ -27,6 +28,8 @@ internal class FakeSSHConnectionManager : ISSHConnectionManager
     public IReadOnlyList<SSHCall> Calls => _calls.AsReadOnly();
 
     public bool IsConnected => _isConnected;
+
+    public string? TargetHost => _targetHost;
 
     public SshClient? SshClient => null; // Fake implementation doesn't provide real SSH client
 
@@ -82,6 +85,7 @@ internal class FakeSSHConnectionManager : ISSHConnectionManager
             throw new InvalidOperationException("Failed to establish SSH connection (configured to fail)");
         }
 
+        _targetHost = context.TargetHost;
         _isConnected = true;
         return Task.CompletedTask;
     }

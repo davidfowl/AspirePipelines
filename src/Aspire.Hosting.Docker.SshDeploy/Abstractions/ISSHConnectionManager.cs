@@ -17,6 +17,13 @@ internal interface ISSHConnectionManager : IAsyncDisposable
     bool IsConnected { get; }
 
     /// <summary>
+    /// Gets the original target host that was configured for the connection.
+    /// This preserves the domain name even after SSH.NET resolves it to an IP address.
+    /// Returns null if not connected.
+    /// </summary>
+    string? TargetHost { get; }
+
+    /// <summary>
     /// Gets the underlying SSH client for advanced operations (e.g., utilities that need direct access).
     /// Returns null if not connected.
     /// </summary>

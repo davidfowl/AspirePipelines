@@ -468,8 +468,8 @@ internal class DockerSSHPipeline(
         await RemoteOperationsFactory.DockerComposeService.StartAsync(RemoteDeployPath, context.CancellationToken);
         await startTask.SucceedAsync("New containers started", context.CancellationToken);
 
-        // Get target host for URLs
-        var targetHost = _sshConnectionManager?.SshClient?.ConnectionInfo?.Host
+        // Get target host for URLs (use original configured host, not resolved IP)
+        var targetHost = _sshConnectionManager?.TargetHost
             ?? throw new InvalidOperationException("SSH connection not established");
 
         // Monitor service health
