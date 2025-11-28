@@ -4,8 +4,22 @@ Deploy .NET Aspire applications to remote Docker hosts via SSH.
 
 ## Installation
 
+1. Add the package feed:
+
 ```bash
-dotnet add package Aspire.Hosting.Docker.SshDeploy
+dotnet nuget add source https://f.feedz.io/davidfowl/aspire/nuget/index.json --name davidfowl-aspire
+```
+
+2. Install the package:
+
+```bash
+aspire add docker-sshdeploy
+```
+
+Or with the .NET CLI:
+
+```bash
+dotnet add package Aspire.Hosting.Docker.SshDeploy --prerelease
 ```
 
 ## Usage

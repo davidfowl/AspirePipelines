@@ -15,14 +15,25 @@ flowchart LR
 
 ## Quick Start
 
-1. Install the package:
+1. Add the package feed:
 
 ```bash
 dotnet nuget add source https://f.feedz.io/davidfowl/aspire/nuget/index.json --name davidfowl-aspire
+```
+
+2. Install the package:
+
+```bash
+aspire add docker-sshdeploy
+```
+
+Or with the .NET CLI:
+
+```bash
 dotnet add package Aspire.Hosting.Docker.SshDeploy --prerelease
 ```
 
-2. Add SSH deployment support to your AppHost:
+3. Add SSH deployment support to your AppHost:
 
 ```csharp
 builder.AddDockerComposeEnvironment("env")
