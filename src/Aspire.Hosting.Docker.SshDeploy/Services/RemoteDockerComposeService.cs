@@ -141,12 +141,20 @@ internal class RemoteDockerComposeService : IRemoteDockerComposeService
             _logger.LogWarning("Failed to get service status (exit code {ExitCode}): {Error}", result.ExitCode, result.Error);
         }
 
-        // Build service URLs from published ports
-        var serviceUrls = services
-            .Where(s => s.Publishers.Any(p => p.PublishedPort > 0))
-            .ToDictionary(
-                s => s.Service,
-                s => $"http://{host}:{s.Publishers.First(p => p.PublishedPort > 0).PublishedPort}");
+        // Build service URLs from published ports (supporting multiple ports per service)
+        var serviceUrls = new Dictionary<string, List<string>>();
+        foreach (var service in services)
+        {
+            var urls = service.Publishers
+                .Where(p => p.PublishedPort > 0)
+                .Select(p => BuildUrl(host, p.PublishedPort))
+                .ToList();
+
+            if (urls.Count > 0)
+            {
+                serviceUrls[service.Service] = urls;
+            }
+        }
 
         _logger.LogDebug("Found {ServiceCount} services, {UrlCount} with URLs", services.Count, serviceUrls.Count);
 
@@ -156,6 +164,13 @@ internal class RemoteDockerComposeService : IRemoteDockerComposeService
             HealthyServices: services.Count(s => s.IsHealthy),
             UnhealthyServices: services.Count(s => !s.IsHealthy),
             ServiceUrls: serviceUrls);
+    }
+
+    private static string BuildUrl(string host, int port)
+    {
+        // Use HTTPS for well-known secure ports
+        var scheme = port is 443 or 8443 ? "https" : "http";
+        return $"{scheme}://{host}:{port}";
     }
 
     public async IAsyncEnumerable<ComposeStatus> StreamStatusAsync(

@@ -484,9 +484,7 @@ internal class DockerSSHPipeline(
         _dashboardServiceName = dashboardService?.Name;
 
         // Format and log the service URLs table
-        var serviceUrlsForTable = status.ServiceUrls.ToDictionary(
-            kvp => kvp.Key,
-            kvp => new List<string> { kvp.Value });
+        var serviceUrlsForTable = status.ServiceUrls;
 
         if (!ServiceUrlFormatter.CanShowTargetHost(_configuration, targetHost))
         {

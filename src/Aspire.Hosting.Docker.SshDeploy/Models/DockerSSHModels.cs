@@ -73,4 +73,4 @@ internal record ComposeStatus(
     int TotalServices,
     int HealthyServices,
     int UnhealthyServices,
-    Dictionary<string, string> ServiceUrls);
+    Dictionary<string, List<string>> ServiceUrls);

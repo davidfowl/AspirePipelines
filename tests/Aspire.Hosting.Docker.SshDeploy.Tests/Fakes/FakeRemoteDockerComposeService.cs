@@ -123,7 +123,7 @@ internal class FakeRemoteDockerComposeService : IRemoteDockerComposeService
             TotalServices: 0,
             HealthyServices: 0,
             UnhealthyServices: 0,
-            ServiceUrls: new Dictionary<string, string>()));
+            ServiceUrls: new Dictionary<string, List<string>>()));
     }
 
     public async IAsyncEnumerable<ComposeStatus> StreamStatusAsync(
