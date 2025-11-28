@@ -29,6 +29,45 @@ aspire deploy
 
 **That's it.** The pipeline will prompt you for SSH credentials, registry, and deploy path. No configuration required.
 
+## File Transfer
+
+Transfer additional files (certificates, configs, etc.) to the remote server.
+
+### App Files (relative to deploy path)
+
+Use `WithAppFileTransfer` to transfer files to a subdirectory within the deployment path:
+
+```csharp
+builder.AddDockerComposeEnvironment("env")
+    .WithSshDeploySupport()
+    .WithAppFileTransfer("./certs", "certs");  // ./certs → {RemoteDeployPath}/certs
+```
+
+### Absolute Paths
+
+Use `WithFileTransfer` for full control over the remote destination:
+
+```csharp
+var certDir = builder.AddParameter("certDir");  // e.g., "$HOME/certs"
+
+builder.AddDockerComposeEnvironment("env")
+    .WithSshDeploySupport()
+    .WithFileTransfer("./certs", certDir);  // ./certs → $HOME/certs
+```
+
+Or with a string literal:
+```csharp
+.WithFileTransfer("./certs", "$HOME/certs")
+```
+
+Multiple file transfers can be chained:
+```csharp
+builder.AddDockerComposeEnvironment("env")
+    .WithSshDeploySupport()
+    .WithAppFileTransfer("./config", "config")
+    .WithFileTransfer("./certs", certDir);
+```
+
 ## Configuration (Optional)
 
 To skip prompts, pre-configure via `appsettings.json`:

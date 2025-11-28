@@ -93,9 +93,13 @@ internal class DockerSSHPipeline(
         var transferFiles = new PipelineStep { Name = $"transfer-files-{DockerComposeEnvironment.Name}", Action = TransferDeploymentFilesPipelineStep };
         transferFiles.DependsOn(mergeEnv);
 
-        // Deploy (depends on files being transferred)
+        // Transfer extra files configured via WithFileTransfer (depends on core files being transferred)
+        var transferExtraFiles = new PipelineStep { Name = $"transfer-extra-files-{DockerComposeEnvironment.Name}", Action = TransferExtraFilesStep };
+        transferExtraFiles.DependsOn(transferFiles);
+
+        // Deploy (depends on all files being transferred)
         var deploy = new PipelineStep { Name = $"remote-docker-deploy-{DockerComposeEnvironment.Name}", Action = DeployApplicationStep };
-        deploy.DependsOn(transferFiles);
+        deploy.DependsOn(transferExtraFiles);
 
         // Extract dashboard login token from logs
         var extractDashboardToken = new PipelineStep { Name = $"extract-dashboard-token-{DockerComposeEnvironment.Name}", Action = ExtractDashboardLoginTokenStep };
@@ -110,7 +114,7 @@ internal class DockerSSHPipeline(
         deploySshStep.DependsOn(cleanup);
         deploySshStep.RequiredBy(WellKnownPipelineSteps.Deploy);
 
-        return [prereqs, establishSsh, configureRegistry, configureDeployment, prepareRemote, pushImages, mergeEnv, transferFiles, deploy, extractDashboardToken, cleanup, deploySshStep];
+        return [prereqs, establishSsh, configureRegistry, configureDeployment, prepareRemote, pushImages, mergeEnv, transferFiles, transferExtraFiles, deploy, extractDashboardToken, cleanup, deploySshStep];
     }
 
     public Task ConfigurePipelineAsync(PipelineConfigurationContext context)
@@ -346,6 +350,83 @@ internal class DockerSSHPipeline(
 
         await copyTask.SucceedAsync($"✓ {dockerComposeFile} verified ({transferResult.BytesTransferred} bytes)", context.CancellationToken);
         await step.SucceedAsync("File transfer completed");
+    }
+
+    private async Task TransferExtraFilesStep(PipelineStepContext context)
+    {
+        var step = context.ReportingStep;
+
+        // Get all file transfer annotations
+        var fileTransfers = DockerComposeEnvironment.Annotations.OfType<FileTransferAnnotation>().ToList();
+
+        if (fileTransfers.Count == 0)
+        {
+            await step.SucceedAsync("No extra files configured for transfer");
+            return;
+        }
+
+        var totalFilesTransferred = 0;
+
+        foreach (var transfer in fileTransfers)
+        {
+            // Resolve the remote path from the value provider
+            var resolvedPath = await transfer.RemotePath.GetValueAsync(context.CancellationToken);
+            if (string.IsNullOrEmpty(resolvedPath))
+            {
+                context.Logger.LogWarning("Remote path resolved to empty value, skipping transfer for {LocalPath}", transfer.LocalPath);
+                continue;
+            }
+
+            // If relative to deploy path, prepend RemoteDeployPath
+            var remotePath = transfer.IsRelativeToDeployPath
+                ? $"{RemoteDeployPath}/{resolvedPath}"
+                : resolvedPath;
+
+            // Resolve local path relative to AppHost directory
+            var localPath = Path.IsPathRooted(transfer.LocalPath)
+                ? transfer.LocalPath
+                : Path.Combine(_hostEnvironment.ContentRootPath, transfer.LocalPath);
+
+            if (!Directory.Exists(localPath))
+            {
+                context.Logger.LogWarning("Local directory not found: {LocalPath}, skipping", localPath);
+                continue;
+            }
+
+            await using var transferTask = await step.CreateTaskAsync($"Transferring files to {remotePath}", context.CancellationToken);
+
+            // Create remote directory (for absolute paths, this creates via mkdir -p)
+            context.Logger.LogDebug("Creating remote directory: {RemotePath}", remotePath);
+            await RemoteOperationsFactory.DockerEnvironmentService.PrepareDeploymentDirectoryAsync(remotePath, context.CancellationToken);
+
+            // Transfer all files from the local directory
+            var files = Directory.GetFiles(localPath, "*", SearchOption.AllDirectories);
+            foreach (var file in files)
+            {
+                var relativePath = Path.GetRelativePath(localPath, file);
+                var remoteFilePath = $"{remotePath}/{relativePath.Replace(Path.DirectorySeparatorChar, '/')}";
+
+                // Ensure remote subdirectory exists
+                var remoteDir = Path.GetDirectoryName(remoteFilePath)?.Replace(Path.DirectorySeparatorChar, '/');
+                if (!string.IsNullOrEmpty(remoteDir) && remoteDir != remotePath)
+                {
+                    await RemoteOperationsFactory.DockerEnvironmentService.PrepareDeploymentDirectoryAsync(remoteDir, context.CancellationToken);
+                }
+
+                var result = await RemoteOperationsFactory.FileService.TransferWithVerificationAsync(file, remoteFilePath, context.CancellationToken);
+                if (!result.Success)
+                {
+                    throw new InvalidOperationException($"Failed to transfer file: {relativePath}");
+                }
+
+                totalFilesTransferred++;
+                context.Logger.LogDebug("Transferred {File} -> {RemotePath}", relativePath, remoteFilePath);
+            }
+
+            await transferTask.SucceedAsync($"Transferred {files.Length} file(s) to {remotePath}", context.CancellationToken);
+        }
+
+        await step.SucceedAsync($"Extra file transfer completed: {totalFilesTransferred} file(s)");
     }
 
     private async Task DeployApplicationStep(PipelineStepContext context)

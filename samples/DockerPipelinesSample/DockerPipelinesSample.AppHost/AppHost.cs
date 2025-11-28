@@ -2,7 +2,8 @@ var builder = DistributedApplication.CreateBuilder(args);
 
 builder.AddDockerComposeEnvironment("env")
     .WithDashboard(db => db.WithHostPort(8085))
-    .WithSshDeploySupport();
+    .WithSshDeploySupport()
+    .WithAppFileTransfer("data", "data");
 
 var p = builder.AddParameter("p");
 

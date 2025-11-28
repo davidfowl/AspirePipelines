@@ -6,6 +6,7 @@ using Aspire.Hosting.Docker.SshDeploy.Abstractions;
 using Aspire.Hosting.Docker.SshDeploy.Infrastructure;
 using Aspire.Hosting.Docker.SshDeploy.Services;
 using Aspire.Hosting.Pipelines;
+using Aspire.Hosting.Utils;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -13,6 +14,30 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace Aspire.Hosting;
+
+/// <summary>
+/// Represents a file transfer mapping from a local path to a remote path on the deployment target.
+/// </summary>
+/// <param name="localPath">The local path (relative to AppHost directory) containing files to transfer.</param>
+/// <param name="remotePath">The remote path provider that resolves to the destination directory.</param>
+/// <param name="isRelativeToDeployPath">If true, the remote path is relative to RemoteDeployPath; otherwise it's an absolute path.</param>
+public class FileTransferAnnotation(string localPath, IValueProvider remotePath, bool isRelativeToDeployPath) : IResourceAnnotation
+{
+    /// <summary>
+    /// Gets the local path containing files to transfer.
+    /// </summary>
+    public string LocalPath { get; } = localPath;
+
+    /// <summary>
+    /// Gets the value provider for the remote destination path.
+    /// </summary>
+    public IValueProvider RemotePath { get; } = remotePath;
+
+    /// <summary>
+    /// Gets whether the remote path is relative to the deployment path.
+    /// </summary>
+    public bool IsRelativeToDeployPath { get; } = isRelativeToDeployPath;
+}
 
 /// <summary>
 /// Provides extension methods for adding Docker SSH pipeline resources to a distributed application.
@@ -73,5 +98,56 @@ public static class DockerPipelineExtensions
             var pipeline = context.Services.GetRequiredKeyedService<DockerSSHPipeline>(resourceBuilder.Resource);
             return pipeline.ConfigurePipelineAsync(context);
         });
+    }
+
+    /// <summary>
+    /// Configures files to be transferred to the remote deployment directory via SCP.
+    /// The remote path is relative to the configured RemoteDeployPath.
+    /// </summary>
+    /// <param name="builder">The Docker Compose environment resource builder.</param>
+    /// <param name="localPath">The local path (relative to AppHost directory) containing files to transfer.</param>
+    /// <param name="remoteSubPath">The subdirectory within RemoteDeployPath where files will be transferred.</param>
+    /// <returns>The resource builder for method chaining.</returns>
+    public static IResourceBuilder<DockerComposeEnvironmentResource> WithAppFileTransfer(
+        this IResourceBuilder<DockerComposeEnvironmentResource> builder,
+        string localPath,
+        string remoteSubPath)
+    {
+        builder.Resource.Annotations.Add(new FileTransferAnnotation(localPath, ReferenceExpression.Create($"{remoteSubPath}"), isRelativeToDeployPath: true));
+        return builder;
+    }
+
+    /// <summary>
+    /// Configures files to be transferred to an absolute path on the remote deployment target via SCP.
+    /// The remote directory will be created if it doesn't exist.
+    /// </summary>
+    /// <param name="builder">The Docker Compose environment resource builder.</param>
+    /// <param name="localPath">The local path (relative to AppHost directory) containing files to transfer.</param>
+    /// <param name="remotePath">A parameter resource that resolves to the absolute remote destination directory.</param>
+    /// <returns>The resource builder for method chaining.</returns>
+    public static IResourceBuilder<DockerComposeEnvironmentResource> WithFileTransfer(
+        this IResourceBuilder<DockerComposeEnvironmentResource> builder,
+        string localPath,
+        IResourceBuilder<ParameterResource> remotePath)
+    {
+        builder.Resource.Annotations.Add(new FileTransferAnnotation(localPath, remotePath.Resource, isRelativeToDeployPath: false));
+        return builder;
+    }
+
+    /// <summary>
+    /// Configures files to be transferred to an absolute path on the remote deployment target via SCP.
+    /// The remote directory will be created if it doesn't exist.
+    /// </summary>
+    /// <param name="builder">The Docker Compose environment resource builder.</param>
+    /// <param name="localPath">The local path (relative to AppHost directory) containing files to transfer.</param>
+    /// <param name="remotePath">The absolute remote destination directory path (supports $HOME and ~ expansion).</param>
+    /// <returns>The resource builder for method chaining.</returns>
+    public static IResourceBuilder<DockerComposeEnvironmentResource> WithFileTransfer(
+        this IResourceBuilder<DockerComposeEnvironmentResource> builder,
+        string localPath,
+        string remotePath)
+    {
+        builder.Resource.Annotations.Add(new FileTransferAnnotation(localPath, ReferenceExpression.Create($"{remotePath}"), isRelativeToDeployPath: false));
+        return builder;
     }
 }
