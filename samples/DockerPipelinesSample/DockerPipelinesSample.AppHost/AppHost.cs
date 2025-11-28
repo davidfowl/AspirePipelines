@@ -24,7 +24,6 @@ var frontend = builder.AddProject<Projects.DockerPipelinesSample_Web>("webfronte
     .WaitFor(apiService);
 
 var yarp = builder.AddYarp("gateway")
-      .WithExternalHttpEndpoints()
       .WithConfiguration(c =>
       {
           c.AddRoute(frontend);
@@ -46,6 +45,9 @@ if (builder.ExecutionContext.IsPublishMode)
         {
             context.EnvironmentVariables["Kestrel__Certificates__Default__Path"] = "/app/certs/app.pem";
             context.EnvironmentVariables["Kestrel__Certificates__Default__KeyPath"] = "/app/certs/app.key";
+
+            context.EnvironmentVariables["HTTP_PORTS"] = "80";
+            context.EnvironmentVariables["HTTPS_PORTS"] = "443";
         });
 
         yarp.WithBindMount("./certs", "/app/certs");
@@ -56,6 +58,8 @@ if (builder.ExecutionContext.IsPublishMode)
             infra.Volumes[0].Source = "./certs";
         });
     }
+
+    yarp.WithExternalHttpEndpoints();
 }
 
 builder.Build().Run();
