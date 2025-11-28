@@ -71,3 +71,4 @@ jobs:
           DockerRegistry__RepositoryPrefix: ${{ github.repository_owner }}
           Parameters__p: hello
           Parameters__cache_password: ${{ secrets.CACHE_PASSWORD }}
+          UNSAFE_SHOW_TARGET_HOST: true
