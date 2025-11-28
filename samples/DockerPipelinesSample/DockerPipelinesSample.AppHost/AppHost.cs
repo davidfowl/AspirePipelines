@@ -1,3 +1,5 @@
+using Org.BouncyCastle.Crypto.Agreement.Srp;
+
 var builder = DistributedApplication.CreateBuilder(args);
 
 builder.AddDockerComposeEnvironment("env")
@@ -47,6 +49,12 @@ if (builder.ExecutionContext.IsPublishMode)
         });
 
         yarp.WithBindMount("./certs", "/app/certs");
+
+        // Work around being able to use relative paths for the source path
+        yarp.PublishAsDockerComposeService((svc, infra) =>
+        {
+            infra.Volumes[0].Source = "./certs";
+        });
     }
 }
 
