@@ -25,6 +25,24 @@ jobs:
 
       - uses: actions/checkout@v4
 
+      - name: Check TLS secrets
+        id: tls-check
+        env:
+          TLS_CERT: ${{ secrets.TLS_CERT }}
+          TLS_KEY: ${{ secrets.TLS_KEY }}
+        run: |
+          if [ -n "$TLS_CERT" ] && [ -n "$TLS_KEY" ]; then
+            echo "available=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup TLS certificates
+        if: steps.tls-check.outputs.available == 'true'
+        run: |
+          mkdir -p samples/DockerPipelinesSample/DockerPipelinesSample.AppHost/certs
+          echo "${{ secrets.TLS_CERT }}" > samples/DockerPipelinesSample/DockerPipelinesSample.AppHost/certs/app.pem
+          echo "${{ secrets.TLS_KEY }}" > samples/DockerPipelinesSample/DockerPipelinesSample.AppHost/certs/app.key
+          chmod 600 samples/DockerPipelinesSample/DockerPipelinesSample.AppHost/certs/app.key
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
