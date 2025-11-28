@@ -1,5 +1,3 @@
-using Org.BouncyCastle.Crypto.Agreement.Srp;
-
 var builder = DistributedApplication.CreateBuilder(args);
 
 builder.AddDockerComposeEnvironment("env")
@@ -46,8 +44,15 @@ if (builder.ExecutionContext.IsPublishMode)
             context.EnvironmentVariables["Kestrel__Certificates__Default__Path"] = "/app/certs/app.pem";
             context.EnvironmentVariables["Kestrel__Certificates__Default__KeyPath"] = "/app/certs/app.key";
 
-            context.EnvironmentVariables["HTTP_PORTS"] = yarp.GetEndpoint("http").Property(EndpointProperty.TargetPort);
-            context.EnvironmentVariables["HTTPS_PORTS"] = yarp.GetEndpoint("https").Property(EndpointProperty.TargetPort);
+            var httpEndpoint = yarp.GetEndpoint("http");
+            var httpsEndpoint = yarp.GetEndpoint("https");
+
+            var reb = new ReferenceExpressionBuilder();
+            reb.Append($"http://+:{httpEndpoint.Property(EndpointProperty.TargetPort)}");
+            reb.AppendLiteral(";");
+            reb.Append($"https://+:{httpsEndpoint.Property(EndpointProperty.TargetPort)}");
+
+            context.EnvironmentVariables["ASPNETCORE_URLS"] = reb.Build();
         });
 
         yarp.WithBindMount("./certs", "/app/certs");
