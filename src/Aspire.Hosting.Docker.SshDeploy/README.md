@@ -14,34 +14,25 @@ dotnet nuget add source https://f.feedz.io/davidfowl/aspire/nuget/index.json --n
 
 ```bash
 aspire add docker-sshdeploy
-```
 
-Or with the .NET CLI:
-
-```bash
+# Or with the .NET CLI:
 dotnet add package Aspire.Hosting.Docker.SshDeploy --prerelease
 ```
 
-## Usage
-
-Call `WithSshDeploySupport()` on your Docker Compose environment:
+3. Add SSH deployment support to your AppHost:
 
 ```csharp
-var builder = DistributedApplication.CreateBuilder(args);
-
 builder.AddDockerComposeEnvironment("env")
     .WithSshDeploySupport();
-
-builder.Build().Run();
 ```
 
-Then deploy:
+4. Deploy:
 
 ```bash
 aspire deploy
 ```
 
-**That's it.** The pipeline will prompt you for SSH credentials, registry, and deploy path. No configuration required.
+The pipeline will prompt for SSH credentials, registry configuration, and deploy path.
 
 ## File Transfer
 
