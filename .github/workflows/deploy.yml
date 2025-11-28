@@ -13,13 +13,13 @@ jobs:
       contents: read
       packages: write
     steps:
-      - name: Validate required secrets
+      - name: Validate required configuration
         run: |
           missing=""
-          [ -z "${{ secrets.TARGET_HOST }}" ] && missing="$missing TARGET_HOST"
+          [ -z "${{ vars.TARGET_HOST }}" ] && missing="$missing TARGET_HOST"
           [ -z "${{ secrets.SSH_PRIVATE_KEY }}" ] && missing="$missing SSH_PRIVATE_KEY"
           if [ -n "$missing" ]; then
-            echo "::error::Missing required secrets:$missing"
+            echo "::error::Missing required configuration:$missing"
             exit 1
           fi
 
@@ -59,7 +59,7 @@ jobs:
           mkdir -p ${{ github.workspace }}/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ${{ github.workspace }}/.ssh/id_rsa
           chmod 600 ${{ github.workspace }}/.ssh/id_rsa
-          ssh-keyscan -H ${{ secrets.TARGET_HOST }} >> ${{ github.workspace }}/.ssh/known_hosts
+          ssh-keyscan -H ${{ vars.TARGET_HOST }} >> ${{ github.workspace }}/.ssh/known_hosts
 
       - name: Set short SHA
         run: echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
@@ -67,13 +67,12 @@ jobs:
       - name: Deploy
         run: aspire deploy --log-level debug
         env:
-          DockerSSH__TargetHost: ${{ secrets.TARGET_HOST }}
+          DockerSSH__TargetHost: ${{ vars.TARGET_HOST }}
           DockerSSH__SshUsername: ${{ secrets.VPS_USERNAME }}
           DockerSSH__SshKeyPath: ${{ github.workspace }}/.ssh/id_rsa
           DockerRegistry__RegistryUrl: ghcr.io
           DockerRegistry__RepositoryPrefix: ${{ github.repository_owner }}
           Parameters__p: hello
           Parameters__cache_password: ${{ secrets.CACHE_PASSWORD }}
-          UNSAFE_SHOW_TARGET_HOST: true
           # Image tag format: build.{run_number}.{short_sha} (e.g., build.42.abc1234)
           IMAGE_TAG_SUFFIX: build.${{ github.run_number }}.${{ env.SHORT_SHA }}
