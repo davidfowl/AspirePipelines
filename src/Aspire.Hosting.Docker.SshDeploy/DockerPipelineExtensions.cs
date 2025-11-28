@@ -74,6 +74,7 @@ public static class DockerPipelineExtensions
         resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<SSHConnectionFactory>();
         resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<DockerRegistryService>();
         resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<GitHubActionsGeneratorService>();
+        resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<ISshKeyDiscoveryService, SshKeyDiscoveryService>();
 
         // Register DockerSSHPipeline as a keyed service (one per resource)
         resourceBuilder.ApplicationBuilder.Services.AddKeyedSingleton(
@@ -86,6 +87,7 @@ public static class DockerPipelineExtensions
                 sp.GetRequiredService<SSHConnectionFactory>(),
                 sp.GetRequiredService<DockerRegistryService>(),
                 sp.GetRequiredService<GitHubActionsGeneratorService>(),
+                sp.GetRequiredService<ISshKeyDiscoveryService>(),
                 sp.GetRequiredService<IConfiguration>(),
                 sp.GetRequiredService<IHostEnvironment>(),
                 sp.GetRequiredService<ILoggerFactory>()));

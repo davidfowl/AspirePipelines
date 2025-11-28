@@ -26,6 +26,7 @@ internal class DockerSSHPipeline(
     SSHConnectionFactory sshConnectionFactory,
     DockerRegistryService dockerRegistryService,
     GitHubActionsGeneratorService gitHubActionsGeneratorService,
+    ISshKeyDiscoveryService sshKeyDiscoveryService,
     IConfiguration configuration,
     IHostEnvironment hostEnvironment,
     ILoggerFactory loggerFactory) : IAsyncDisposable
@@ -35,9 +36,11 @@ internal class DockerSSHPipeline(
     private readonly SSHConnectionFactory _sshConnectionFactory = sshConnectionFactory;
     private readonly DockerRegistryService _dockerRegistryService = dockerRegistryService;
     private readonly GitHubActionsGeneratorService _gitHubActionsGeneratorService = gitHubActionsGeneratorService;
+    private readonly ISshKeyDiscoveryService _sshKeyDiscoveryService = sshKeyDiscoveryService;
     private readonly IConfiguration _configuration = configuration;
     private readonly IHostEnvironment _hostEnvironment = hostEnvironment;
     private readonly ILoggerFactory _loggerFactory = loggerFactory;
+    private readonly ILogger _logger = loggerFactory.CreateLogger<DockerSSHPipeline>();
 
     // Execution-scoped state (set during pipeline execution)
     private ISSHConnectionManager? _sshConnectionManager;
@@ -590,65 +593,101 @@ internal class DockerSSHPipeline(
         // The environment name comes from the hosting environment (e.g., "Production")
         var environmentName = _hostEnvironment.EnvironmentName;
 
-        // 2. Initialize parameters using Aspire's built-in parameter processor
-        await using var paramTask = await step.CreateTaskAsync("Collecting parameter values", ct);
-        await parameterProcessor.InitializeParametersAsync(context.Model, waitForResolution: true, ct);
-        await paramTask.SucceedAsync("Parameters collected", ct);
-
-        // Build parameter infos early so we can determine required values
-        var parameters = context.Model.Resources.OfType<ParameterResource>().ToList();
-        var parameterInfos = new List<ParameterInfo>();
-        foreach (var p in parameters)
-        {
-            var configKey = p.IsConnectionString ? $"ConnectionStrings:{p.Name}" : $"Parameters:{p.Name}";
-            var value = await p.GetValueAsync(ct);
-            parameterInfos.Add(new ParameterInfo(configKey, p.Secret, value));
-        }
-
-        // 2. Query existing state from GitHub
+        // 2. Query existing state from GitHub FIRST (before prompting for parameters)
         await using var queryTask = await step.CreateTaskAsync("Checking existing GitHub configuration", ct);
         var existingSecrets = await _gitHubActionsGeneratorService.GetEnvironmentSecretsAsync(environmentName, ct);
         var existingVariables = await _gitHubActionsGeneratorService.GetEnvironmentVariablesAsync(environmentName, ct);
         await queryTask.SucceedAsync($"Found {existingSecrets.Count} secrets, {existingVariables.Count} variables", ct);
 
-        // 3. Prompt for SSH authentication method
-        await using var authTask = await step.CreateTaskAsync("Selecting SSH authentication method", ct);
-        var authOptions = new List<KeyValuePair<string, string>>
+        // Build parameter infos from the model (without resolving values yet)
+        var parameters = context.Model.Resources.OfType<ParameterResource>().ToList();
+        var parameterInfos = parameters.Select(p =>
         {
-            new("key", "SSH Key (no passphrase)"),
-            new("key-passphrase", "SSH Key (with passphrase)"),
-            new("password", "Password")
-        };
+            var info = new ParameterInfo(p, null, ExistsInGitHub: false);
+            var existsInGitHub = p.Secret
+                ? existingSecrets.Contains(info.GitHubName)
+                : existingVariables.Contains(info.GitHubName);
+            return info with { ExistsInGitHub = existsInGitHub };
+        }).ToList();
 
-        var authMethodResult = await interactionService.PromptInputsAsync(
-            "SSH Authentication Method",
-            "How do you want to authenticate to the remote server?",
-            [
-                new InteractionInput
+        // Only initialize parameters that don't already exist in GitHub
+        var missingParameters = parameterInfos.Where(p => !p.ExistsInGitHub).ToList();
+        if (missingParameters.Count > 0)
+        {
+            await using var paramTask = await step.CreateTaskAsync("Collecting parameter values", ct);
+            await parameterProcessor.InitializeParametersAsync(context.Model, waitForResolution: true, ct);
+            await paramTask.SucceedAsync($"Collected {missingParameters.Count} parameter value(s)", ct);
+
+            // Now get the resolved values for missing parameters
+            for (var i = 0; i < parameterInfos.Count; i++)
+            {
+                var info = parameterInfos[i];
+                if (!info.ExistsInGitHub)
                 {
-                    Name = "authMethod",
-                    Label = "Authentication Method",
-                    InputType = InputType.Choice,
-                    Required = true,
-                    Options = authOptions
+                    var value = await info.Parameter.GetValueAsync(ct);
+                    parameterInfos[i] = info with { Value = value };
                 }
-            ],
-            cancellationToken: ct);
-
-        if (authMethodResult.Canceled)
-        {
-            throw new OperationCanceledException("Configuration canceled");
+            }
         }
 
-        var authMethodValue = authMethodResult.Data["authMethod"].Value;
-        var sshAuthType = authMethodValue switch
+        // 3. Detect or prompt for SSH authentication method
+        SshAuthType sshAuthType;
+        var detectedAuthType = DetectSshAuthType(existingSecrets);
+
+        if (detectedAuthType.HasValue)
         {
-            "key" => SshAuthType.Key,
-            "key-passphrase" => SshAuthType.KeyWithPassphrase,
-            "password" => SshAuthType.Password,
-            _ => SshAuthType.Key
-        };
-        await authTask.SucceedAsync($"Selected: {authOptions.First(o => o.Key == authMethodValue).Value}", ct);
+            // Auth type already configured - use existing
+            sshAuthType = detectedAuthType.Value;
+            var authLabel = sshAuthType switch
+            {
+                SshAuthType.Key => "SSH Key (no passphrase)",
+                SshAuthType.KeyWithPassphrase => "SSH Key (with passphrase)",
+                SshAuthType.Password => "Password",
+                _ => "Unknown"
+            };
+            _logger.LogInformation("Detected existing SSH auth type: {AuthType}", authLabel);
+        }
+        else
+        {
+            // No auth configured - prompt user
+            await using var authTask = await step.CreateTaskAsync("Selecting SSH authentication method", ct);
+            var authOptions = new List<KeyValuePair<string, string>>
+            {
+                new("key", "SSH Key (no passphrase)"),
+                new("key-passphrase", "SSH Key (with passphrase)"),
+                new("password", "Password")
+            };
+
+            var authMethodResult = await interactionService.PromptInputsAsync(
+                "SSH Authentication Method",
+                "How do you want to authenticate to the remote server?",
+                [
+                    new InteractionInput
+                    {
+                        Name = "authMethod",
+                        Label = "Authentication Method",
+                        InputType = InputType.Choice,
+                        Required = true,
+                        Options = authOptions
+                    }
+                ],
+                cancellationToken: ct);
+
+            if (authMethodResult.Canceled)
+            {
+                throw new OperationCanceledException("Configuration canceled");
+            }
+
+            var authMethodValue = authMethodResult.Data["authMethod"].Value;
+            sshAuthType = authMethodValue switch
+            {
+                "key" => SshAuthType.Key,
+                "key-passphrase" => SshAuthType.KeyWithPassphrase,
+                "password" => SshAuthType.Password,
+                _ => SshAuthType.Key
+            };
+            await authTask.SucceedAsync($"Selected: {authOptions.First(o => o.Key == authMethodValue).Value}", ct);
+        }
 
         // 4. Determine required and orphaned values
         var requiredInfraSecrets = GetRequiredInfraSecrets(sshAuthType);
@@ -673,13 +712,14 @@ internal class DockerSSHPipeline(
             .Where(v => !requiredVariables.Contains(v))
             .ToList();
 
-        // Categorize infrastructure values
+        // 5. Determine what values need to be collected
         var missingInfraSecrets = requiredInfraSecrets.Where(s => !existingSecrets.Contains(s)).ToList();
-        var existingRequiredInfraSecrets = requiredInfraSecrets.Where(s => existingSecrets.Contains(s)).ToList();
         var missingInfraVariables = requiredInfraVariables.Where(v => !existingVariables.Contains(v)).ToList();
-        var existingRequiredInfraVariables = requiredInfraVariables.Where(v => existingVariables.Contains(v)).ToList();
+        // Get actual names from GitHub (preserves casing/format from GitHub)
+        var existingRequiredInfraSecrets = existingSecrets.Where(s => requiredInfraSecrets.Contains(s)).ToList();
+        var existingRequiredInfraVariables = existingVariables.Where(v => requiredInfraVariables.Contains(v)).ToList();
 
-        // 5. Handle existing values - ask if user wants to overwrite
+        // Ask if user wants to overwrite existing values
         var overwriteExisting = false;
         if (existingRequiredInfraSecrets.Count > 0 || existingRequiredInfraVariables.Count > 0)
         {
@@ -687,10 +727,18 @@ internal class DockerSSHPipeline(
                 .Concat(existingRequiredInfraVariables.Select(v => $"  - Variable: {v}"))
                 .ToList();
 
-            var overwriteResult = await interactionService.PromptConfirmationAsync(
+            var overwriteResult = await interactionService.PromptNotificationAsync(
                 "Existing GitHub Values",
                 $"The following values already exist in environment '{environmentName}':\n{string.Join("\n", existingList)}\n\nDo you want to overwrite them?",
-                cancellationToken: ct);
+                new NotificationInteractionOptions
+                {
+                    Intent = MessageIntent.Confirmation,
+                    ShowSecondaryButton = true,
+                    ShowDismiss = false,
+                    PrimaryButtonText = "Yes",
+                    SecondaryButtonText = "No"
+                },
+                ct);
 
             if (overwriteResult.Canceled)
             {
@@ -700,12 +748,12 @@ internal class DockerSSHPipeline(
             overwriteExisting = overwriteResult.Data;
         }
 
-        // 6. Prompt for infrastructure values (only missing, or all if overwriting)
-        await using var infraTask = await step.CreateTaskAsync("Configuring infrastructure", ct);
-
         var valuesToPrompt = overwriteExisting
             ? requiredInfraSecrets.Union(requiredInfraVariables).ToHashSet(StringComparer.OrdinalIgnoreCase)
             : missingInfraSecrets.Union(missingInfraVariables).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        // 6. Prompt for infrastructure values
+        await using var infraTask = await step.CreateTaskAsync("Configuring infrastructure", ct);
 
         Dictionary<string, string> collectedValues = [];
 
@@ -725,7 +773,30 @@ internal class DockerSSHPipeline(
 
             if (valuesToPrompt.Contains("SSH_PRIVATE_KEY"))
             {
-                infraInputs.Add(new InteractionInput { Name = "sshPrivateKey", Label = "SSH Private Key", InputType = InputType.SecretText, Required = true });
+                // Discover available SSH keys
+                var discoveredKeys = _sshKeyDiscoveryService.DiscoverKeys();
+
+                if (discoveredKeys.Count > 0)
+                {
+                    var keyOptions = discoveredKeys
+                        .Select(k => new KeyValuePair<string, string>(k.FullPath, k.KeyType != null ? $"{k.DisplayPath} ({k.KeyType})" : k.DisplayPath))
+                        .ToList();
+
+                    infraInputs.Add(new InteractionInput
+                    {
+                        Name = "sshPrivateKeyPath",
+                        Label = "SSH Private Key",
+                        InputType = InputType.Choice,
+                        Required = true,
+                        Options = keyOptions,
+                        AllowCustomChoice = true
+                    });
+                }
+                else
+                {
+                    // No keys found, fall back to text input
+                    infraInputs.Add(new InteractionInput { Name = "sshPrivateKeyPath", Label = "SSH Private Key Path", InputType = InputType.Text, Required = true, Value = "~/.ssh/id_rsa" });
+                }
             }
 
             if (valuesToPrompt.Contains("SSH_KEY_PASSPHRASE"))
@@ -760,9 +831,10 @@ internal class DockerSSHPipeline(
                 collectedValues["SSH_USERNAME"] = infraResult.Data["sshUsername"].Value!;
             }
 
-            if (valuesToPrompt.Contains("SSH_PRIVATE_KEY") && !string.IsNullOrEmpty(infraResult.Data["sshPrivateKey"].Value))
+            if (valuesToPrompt.Contains("SSH_PRIVATE_KEY") && !string.IsNullOrEmpty(infraResult.Data["sshPrivateKeyPath"].Value))
             {
-                collectedValues["SSH_PRIVATE_KEY"] = infraResult.Data["sshPrivateKey"].Value!;
+                var keyPath = infraResult.Data["sshPrivateKeyPath"].Value!;
+                collectedValues["SSH_PRIVATE_KEY"] = await _sshKeyDiscoveryService.ReadKeyAsync(keyPath, ct);
             }
 
             if (valuesToPrompt.Contains("SSH_KEY_PASSPHRASE") && !string.IsNullOrEmpty(infraResult.Data["sshKeyPassphrase"].Value))
@@ -789,10 +861,18 @@ internal class DockerSSHPipeline(
                 .Concat(orphanedVariables.Select(v => $"  - Variable: {v}"))
                 .ToList();
 
-            var deleteResult = await interactionService.PromptConfirmationAsync(
+            var deleteResult = await interactionService.PromptNotificationAsync(
                 "Orphaned GitHub Values",
                 $"The following secrets/variables are no longer needed:\n{string.Join("\n", orphanList)}\n\nDelete them?",
-                cancellationToken: ct);
+                new NotificationInteractionOptions
+                {
+                    Intent = MessageIntent.Confirmation,
+                    ShowSecondaryButton = true,
+                    ShowDismiss = false,
+                    PrimaryButtonText = "Yes",
+                    SecondaryButtonText = "No"
+                },
+                ct);
 
             if (!deleteResult.Canceled && deleteResult.Data)
             {
@@ -824,12 +904,11 @@ internal class DockerSSHPipeline(
             await _gitHubActionsGeneratorService.SetEnvironmentValueAsync(environmentName, name, value, isSecret, ct);
         }
 
-        // Set parameter values in GitHub (only if they have values and need updating)
+        // Set parameter values in GitHub (only for parameters that don't already exist)
         foreach (var info in parameterInfos)
         {
-            if (!string.IsNullOrEmpty(info.Value))
+            if (!info.ExistsInGitHub && !string.IsNullOrEmpty(info.Value))
             {
-                // For parameters, we always set them (they come from the model)
                 await _gitHubActionsGeneratorService.SetEnvironmentValueAsync(environmentName, info.GitHubName, info.Value, info.IsSecret, ct);
             }
         }
@@ -844,10 +923,18 @@ internal class DockerSSHPipeline(
 
         if (File.Exists(outputPath))
         {
-            var overwriteFileResult = await interactionService.PromptConfirmationAsync(
+            var overwriteFileResult = await interactionService.PromptNotificationAsync(
                 "Workflow File Exists",
                 $"The workflow file already exists at:\n{outputPath}\n\nOverwrite it?",
-                cancellationToken: ct);
+                new NotificationInteractionOptions
+                {
+                    Intent = MessageIntent.Confirmation,
+                    ShowSecondaryButton = true,
+                    ShowDismiss = false,
+                    PrimaryButtonText = "Yes",
+                    SecondaryButtonText = "No"
+                },
+                ct);
 
             if (overwriteFileResult.Canceled || !overwriteFileResult.Data)
             {
@@ -868,15 +955,40 @@ internal class DockerSSHPipeline(
     // Infrastructure secrets required for each auth type
     private static HashSet<string> GetRequiredInfraSecrets(SshAuthType authType) => authType switch
     {
-        SshAuthType.Key => ["SSH_USERNAME", "SSH_PRIVATE_KEY"],
-        SshAuthType.KeyWithPassphrase => ["SSH_USERNAME", "SSH_PRIVATE_KEY", "SSH_KEY_PASSPHRASE"],
-        SshAuthType.Password => ["SSH_USERNAME", "SSH_PASSWORD"],
-        _ => []
+        SshAuthType.Key => new(["SSH_USERNAME", "SSH_PRIVATE_KEY"], StringComparer.OrdinalIgnoreCase),
+        SshAuthType.KeyWithPassphrase => new(["SSH_USERNAME", "SSH_PRIVATE_KEY", "SSH_KEY_PASSPHRASE"], StringComparer.OrdinalIgnoreCase),
+        SshAuthType.Password => new(["SSH_USERNAME", "SSH_PASSWORD"], StringComparer.OrdinalIgnoreCase),
+        _ => new(StringComparer.OrdinalIgnoreCase)
     };
 
     // All possible infrastructure secrets (for orphan detection)
     private static readonly HashSet<string> AllPossibleInfraSecrets =
-        ["SSH_USERNAME", "SSH_PRIVATE_KEY", "SSH_KEY_PASSPHRASE", "SSH_PASSWORD"];
+        new(["SSH_USERNAME", "SSH_PRIVATE_KEY", "SSH_KEY_PASSPHRASE", "SSH_PASSWORD"], StringComparer.OrdinalIgnoreCase);
+
+    // Detect SSH auth type from existing secrets
+    private static SshAuthType? DetectSshAuthType(HashSet<string> existingSecrets)
+    {
+        var hasPrivateKey = existingSecrets.Contains("SSH_PRIVATE_KEY");
+        var hasPassphrase = existingSecrets.Contains("SSH_KEY_PASSPHRASE");
+        var hasPassword = existingSecrets.Contains("SSH_PASSWORD");
+
+        if (hasPrivateKey && hasPassphrase)
+        {
+            return SshAuthType.KeyWithPassphrase;
+        }
+
+        if (hasPrivateKey)
+        {
+            return SshAuthType.Key;
+        }
+
+        if (hasPassword)
+        {
+            return SshAuthType.Password;
+        }
+
+        return null;
+    }
 
     private async Task CheckPrerequisitesConcurrently(PipelineStepContext context)
     {

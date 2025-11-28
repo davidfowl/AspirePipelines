@@ -13,11 +13,16 @@ namespace Aspire.Hosting.Docker.SshDeploy.Services;
 internal class SSHConfigurationDiscovery
 {
     private readonly IFileSystem _fileSystem;
+    private readonly ISshKeyDiscoveryService _sshKeyDiscoveryService;
     private readonly ILogger<SSHConfigurationDiscovery> _logger;
 
-    public SSHConfigurationDiscovery(IFileSystem fileSystem, ILogger<SSHConfigurationDiscovery> logger)
+    public SSHConfigurationDiscovery(
+        IFileSystem fileSystem,
+        ISshKeyDiscoveryService sshKeyDiscoveryService,
+        ILogger<SSHConfigurationDiscovery> logger)
     {
         _fileSystem = fileSystem;
+        _sshKeyDiscoveryService = sshKeyDiscoveryService;
         _logger = logger;
     }
 
@@ -28,58 +33,25 @@ internal class SSHConfigurationDiscovery
 
         var config = new SSHConfiguration();
 
-        // Look for SSH keys and known hosts in common locations
+        // Use the SSH key discovery service to find available keys
+        var discoveredKeys = _sshKeyDiscoveryService.DiscoverKeys();
+        foreach (var key in discoveredKeys)
+        {
+            config.AvailableKeyPaths.Add(key.FullPath);
+        }
+
+        // Set default key path to the first discovered key
+        if (config.AvailableKeyPaths.Count > 0)
+        {
+            config.DefaultKeyPath = config.AvailableKeyPaths[0];
+        }
+
+        // Look for known hosts in ~/.ssh
         var homeDir = _fileSystem.GetUserProfilePath();
         var sshDir = _fileSystem.CombinePaths(homeDir, ".ssh");
 
         if (_fileSystem.DirectoryExists(sshDir))
         {
-            // Discover all SSH keys in the .ssh directory
-            var commonKeyFiles = new[] { "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa" };
-
-            // First, add common key files in preferred order
-            var orderedKeyFiles = new List<string>();
-            foreach (var commonKey in commonKeyFiles)
-            {
-                var keyPath = _fileSystem.CombinePaths(sshDir, commonKey);
-                if (_fileSystem.FileExists(keyPath))
-                {
-                    orderedKeyFiles.Add(keyPath);
-                }
-            }
-
-            // Then add any other SSH-like keys that aren't in the common list
-            var otherKeyFiles = _fileSystem.GetFiles(sshDir, "*", SearchOption.TopDirectoryOnly)
-                .Where(f => !_fileSystem.GetFileName(f).EndsWith(".pub") && !_fileSystem.GetFileName(f).EndsWith(".ppk"))
-                .Where(f => !commonKeyFiles.Contains(_fileSystem.GetFileName(f)) && IsLikelySSHKey(f))
-                .OrderBy(f => _fileSystem.GetFileName(f))
-                .ToList();
-
-            orderedKeyFiles.AddRange(otherKeyFiles);
-
-            foreach (var keyPath in orderedKeyFiles)
-            {
-                try
-                {
-                    // Just add the path if the file exists and is readable
-                    if (_fileSystem.FileExists(keyPath))
-                    {
-                        config.AvailableKeyPaths.Add(keyPath);
-                    }
-                }
-                catch
-                {
-                    // Skip keys that can't be read
-                    continue;
-                }
-            }
-
-            // Set default key path to the first discovered key
-            if (config.AvailableKeyPaths.Any())
-            {
-                config.DefaultKeyPath = config.AvailableKeyPaths.First();
-            }
-
             // Discover known hosts from SSH known_hosts file
             var knownHostsPath = _fileSystem.CombinePaths(sshDir, "known_hosts");
             if (_fileSystem.FileExists(knownHostsPath))
@@ -152,37 +124,4 @@ internal class SSHConfigurationDiscovery
         }
     }
 
-    private bool IsLikelySSHKey(string filePath)
-    {
-        try
-        {
-            // Check file size (SSH keys are typically between 100 bytes and 10KB)
-            var fileInfo = new FileInfo(filePath);
-            if (fileInfo.Length is < 100 or > 10240)
-                return false;
-
-            // Read first few lines to check for SSH key headers
-            var firstLines = _fileSystem.ReadAllLines(filePath).Take(3).ToArray();
-            if (firstLines.Length == 0)
-                return false;
-
-            var firstLine = firstLines[0].Trim();
-
-            // Check for common SSH key headers
-            var sshKeyHeaders = new[]
-            {
-                "-----BEGIN OPENSSH PRIVATE KEY-----",
-                "-----BEGIN RSA PRIVATE KEY-----",
-                "-----BEGIN DSA PRIVATE KEY-----",
-                "-----BEGIN EC PRIVATE KEY-----",
-                "-----BEGIN PRIVATE KEY-----"
-            };
-
-            return sshKeyHeaders.Any(header => firstLine.StartsWith(header, StringComparison.OrdinalIgnoreCase));
-        }
-        catch
-        {
-            return false;
-        }
-    }
 }

@@ -3,6 +3,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Docker.SshDeploy.Abstractions;
 using Microsoft.Extensions.Logging;
 
@@ -355,11 +356,23 @@ internal enum SshAuthType
 /// <summary>
 /// Information about a parameter resource.
 /// </summary>
-/// <param name="ConfigurationKey">The configuration key (e.g., "Parameters:cache_password" or "ConnectionStrings:mydb").</param>
-/// <param name="IsSecret">Whether this parameter is a secret.</param>
+/// <param name="Parameter">The parameter resource.</param>
 /// <param name="Value">The resolved value of the parameter.</param>
-internal record ParameterInfo(string ConfigurationKey, bool IsSecret, string? Value)
+/// <param name="ExistsInGitHub">Whether this parameter already exists in GitHub.</param>
+internal record ParameterInfo(ParameterResource Parameter, string? Value, bool ExistsInGitHub)
 {
+    /// <summary>
+    /// Gets the configuration key (e.g., "Parameters:cache_password" or "ConnectionStrings:mydb").
+    /// </summary>
+    public string ConfigurationKey => Parameter.IsConnectionString
+        ? $"ConnectionStrings:{Parameter.Name}"
+        : $"Parameters:{Parameter.Name}";
+
+    /// <summary>
+    /// Gets whether this parameter is a secret.
+    /// </summary>
+    public bool IsSecret => Parameter.Secret;
+
     /// <summary>
     /// Gets the GitHub-compatible name by replacing : and - with _.
     /// </summary>
