@@ -3,7 +3,8 @@ var builder = DistributedApplication.CreateBuilder(args);
 builder.AddDockerComposeEnvironment("env")
     .WithDashboard(db => db.WithHostPort(8085))
     .WithSshDeploySupport()
-    .WithAppFileTransfer("data", "data");
+    // This will be skipped if certs does not exist
+    .WithAppFileTransfer("certs", "certs");
 
 var p = builder.AddParameter("p");
 
@@ -31,6 +32,22 @@ if (builder.ExecutionContext.IsPublishMode)
 {
     // In publish mode, expose YARP on port 80
     yarp.WithHostPort(80);
+
+    // Now wire up TLS if the certs exist
+    var certPath = Path.Combine(builder.AppHostDirectory, "certs");
+
+    if (Directory.Exists(certPath))
+    {
+        yarp.WithHttpsEndpoint(443);
+
+        yarp.WithEnvironment(context =>
+        {
+            context.EnvironmentVariables["Kestrel__Certificates__Default__Path"] = "/app/certs/app.pem";
+            context.EnvironmentVariables["Kestrel__Certificates__Default__KeyPath"] = "/app/certs/app.key";
+        });
+
+        yarp.WithBindMount("./certs", "/app/certs");
+    }
 }
 
 builder.Build().Run();
