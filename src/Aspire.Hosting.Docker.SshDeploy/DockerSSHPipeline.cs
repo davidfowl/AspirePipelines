@@ -25,6 +25,7 @@ internal class DockerSSHPipeline(
     IPipelineOutputService pipelineOutputService,
     SSHConnectionFactory sshConnectionFactory,
     DockerRegistryService dockerRegistryService,
+    GitHubActionsGeneratorService gitHubActionsGeneratorService,
     IConfiguration configuration,
     IHostEnvironment hostEnvironment,
     ILoggerFactory loggerFactory) : IAsyncDisposable
@@ -33,6 +34,7 @@ internal class DockerSSHPipeline(
     private readonly EnvironmentFileReader _environmentFileReader = environmentFileReader;
     private readonly SSHConnectionFactory _sshConnectionFactory = sshConnectionFactory;
     private readonly DockerRegistryService _dockerRegistryService = dockerRegistryService;
+    private readonly GitHubActionsGeneratorService _gitHubActionsGeneratorService = gitHubActionsGeneratorService;
     private readonly IConfiguration _configuration = configuration;
     private readonly IHostEnvironment _hostEnvironment = hostEnvironment;
     private readonly ILoggerFactory _loggerFactory = loggerFactory;
@@ -116,7 +118,11 @@ internal class DockerSSHPipeline(
         deploySshStep.DependsOn(cleanup);
         deploySshStep.RequiredBy(WellKnownPipelineSteps.Deploy);
 
-        return [prereqs, establishSsh, configureRegistry, configureDeployment, prepareRemote, pushImages, mergeEnv, transferFiles, transferExtraFiles, deploy, extractDashboardToken, cleanup, deploySshStep];
+        // Orphan step for GitHub Actions workflow generation (invoked via `aspire do gh-action-{name}`)
+        // This step has no dependencies and is not part of the normal deploy flow
+        var generateGitHubWorkflow = new PipelineStep { Name = $"gh-action-{DockerComposeEnvironment.Name}", Action = GenerateGitHubActionsWorkflowStep };
+
+        return [prereqs, establishSsh, configureRegistry, configureDeployment, prepareRemote, pushImages, mergeEnv, transferFiles, transferExtraFiles, deploy, extractDashboardToken, cleanup, deploySshStep, generateGitHubWorkflow];
     }
 
     public Task ConfigurePipelineAsync(PipelineConfigurationContext context)
@@ -568,6 +574,309 @@ internal class DockerSSHPipeline(
         await File.WriteAllTextAsync(tokenFile, token + Environment.NewLine, context.CancellationToken);
         await step.SucceedAsync($"Dashboard login token written to {tokenFile}");
     }
+
+    private async Task GenerateGitHubActionsWorkflowStep(PipelineStepContext context)
+    {
+        var step = context.ReportingStep;
+        var interactionService = context.Services.GetRequiredService<IInteractionService>();
+        var parameterProcessor = context.Services.GetRequiredService<ParameterProcessor>();
+        var ct = context.CancellationToken;
+
+        // 1. Check prerequisites and get repo root
+        await using var prereqTask = await step.CreateTaskAsync("Checking prerequisites", ct);
+        var repoRoot = await _gitHubActionsGeneratorService.CheckGitHubCliAsync(ct);
+        await prereqTask.SucceedAsync("GitHub CLI is available and authenticated", ct);
+
+        // The environment name comes from the hosting environment (e.g., "Production")
+        var environmentName = _hostEnvironment.EnvironmentName;
+
+        // 2. Initialize parameters using Aspire's built-in parameter processor
+        await using var paramTask = await step.CreateTaskAsync("Collecting parameter values", ct);
+        await parameterProcessor.InitializeParametersAsync(context.Model, waitForResolution: true, ct);
+        await paramTask.SucceedAsync("Parameters collected", ct);
+
+        // Build parameter infos early so we can determine required values
+        var parameters = context.Model.Resources.OfType<ParameterResource>().ToList();
+        var parameterInfos = new List<ParameterInfo>();
+        foreach (var p in parameters)
+        {
+            var configKey = p.IsConnectionString ? $"ConnectionStrings:{p.Name}" : $"Parameters:{p.Name}";
+            var value = await p.GetValueAsync(ct);
+            parameterInfos.Add(new ParameterInfo(configKey, p.Secret, value));
+        }
+
+        // 2. Query existing state from GitHub
+        await using var queryTask = await step.CreateTaskAsync("Checking existing GitHub configuration", ct);
+        var existingSecrets = await _gitHubActionsGeneratorService.GetEnvironmentSecretsAsync(environmentName, ct);
+        var existingVariables = await _gitHubActionsGeneratorService.GetEnvironmentVariablesAsync(environmentName, ct);
+        await queryTask.SucceedAsync($"Found {existingSecrets.Count} secrets, {existingVariables.Count} variables", ct);
+
+        // 3. Prompt for SSH authentication method
+        await using var authTask = await step.CreateTaskAsync("Selecting SSH authentication method", ct);
+        var authOptions = new List<KeyValuePair<string, string>>
+        {
+            new("key", "SSH Key (no passphrase)"),
+            new("key-passphrase", "SSH Key (with passphrase)"),
+            new("password", "Password")
+        };
+
+        var authMethodResult = await interactionService.PromptInputsAsync(
+            "SSH Authentication Method",
+            "How do you want to authenticate to the remote server?",
+            [
+                new InteractionInput
+                {
+                    Name = "authMethod",
+                    Label = "Authentication Method",
+                    InputType = InputType.Choice,
+                    Required = true,
+                    Options = authOptions
+                }
+            ],
+            cancellationToken: ct);
+
+        if (authMethodResult.Canceled)
+        {
+            throw new OperationCanceledException("Configuration canceled");
+        }
+
+        var authMethodValue = authMethodResult.Data["authMethod"].Value;
+        var sshAuthType = authMethodValue switch
+        {
+            "key" => SshAuthType.Key,
+            "key-passphrase" => SshAuthType.KeyWithPassphrase,
+            "password" => SshAuthType.Password,
+            _ => SshAuthType.Key
+        };
+        await authTask.SucceedAsync($"Selected: {authOptions.First(o => o.Key == authMethodValue).Value}", ct);
+
+        // 4. Determine required and orphaned values
+        var requiredInfraSecrets = GetRequiredInfraSecrets(sshAuthType);
+        var requiredInfraVariables = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "TARGET_HOST" };
+
+        var requiredSecrets = requiredInfraSecrets
+            .Union(parameterInfos.Where(p => p.IsSecret).Select(p => p.GitHubName))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var requiredVariables = requiredInfraVariables
+            .Union(parameterInfos.Where(p => !p.IsSecret).Select(p => p.GitHubName))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        // Find orphaned values (existing but no longer needed)
+        var orphanedSecrets = existingSecrets
+            .Where(s => AllPossibleInfraSecrets.Contains(s) || s.StartsWith("PARAMETERS_", StringComparison.OrdinalIgnoreCase) || s.StartsWith("CONNECTIONSTRINGS_", StringComparison.OrdinalIgnoreCase))
+            .Where(s => !requiredSecrets.Contains(s))
+            .ToList();
+
+        var orphanedVariables = existingVariables
+            .Where(v => v.Equals("TARGET_HOST", StringComparison.OrdinalIgnoreCase) || v.StartsWith("PARAMETERS_", StringComparison.OrdinalIgnoreCase) || v.StartsWith("CONNECTIONSTRINGS_", StringComparison.OrdinalIgnoreCase))
+            .Where(v => !requiredVariables.Contains(v))
+            .ToList();
+
+        // Categorize infrastructure values
+        var missingInfraSecrets = requiredInfraSecrets.Where(s => !existingSecrets.Contains(s)).ToList();
+        var existingRequiredInfraSecrets = requiredInfraSecrets.Where(s => existingSecrets.Contains(s)).ToList();
+        var missingInfraVariables = requiredInfraVariables.Where(v => !existingVariables.Contains(v)).ToList();
+        var existingRequiredInfraVariables = requiredInfraVariables.Where(v => existingVariables.Contains(v)).ToList();
+
+        // 5. Handle existing values - ask if user wants to overwrite
+        var overwriteExisting = false;
+        if (existingRequiredInfraSecrets.Count > 0 || existingRequiredInfraVariables.Count > 0)
+        {
+            var existingList = existingRequiredInfraSecrets.Select(s => $"  - Secret: {s}")
+                .Concat(existingRequiredInfraVariables.Select(v => $"  - Variable: {v}"))
+                .ToList();
+
+            var overwriteResult = await interactionService.PromptConfirmationAsync(
+                "Existing GitHub Values",
+                $"The following values already exist in environment '{environmentName}':\n{string.Join("\n", existingList)}\n\nDo you want to overwrite them?",
+                cancellationToken: ct);
+
+            if (overwriteResult.Canceled)
+            {
+                throw new OperationCanceledException("Configuration canceled");
+            }
+
+            overwriteExisting = overwriteResult.Data;
+        }
+
+        // 6. Prompt for infrastructure values (only missing, or all if overwriting)
+        await using var infraTask = await step.CreateTaskAsync("Configuring infrastructure", ct);
+
+        var valuesToPrompt = overwriteExisting
+            ? requiredInfraSecrets.Union(requiredInfraVariables).ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : missingInfraSecrets.Union(missingInfraVariables).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        Dictionary<string, string> collectedValues = [];
+
+        if (valuesToPrompt.Count > 0)
+        {
+            var infraInputs = new List<InteractionInput>();
+
+            if (valuesToPrompt.Contains("TARGET_HOST"))
+            {
+                infraInputs.Add(new InteractionInput { Name = "targetHost", Label = "Target Host", InputType = InputType.Text, Required = true });
+            }
+
+            if (valuesToPrompt.Contains("SSH_USERNAME"))
+            {
+                infraInputs.Add(new InteractionInput { Name = "sshUsername", Label = "SSH Username", InputType = InputType.Text, Required = true, Value = "root" });
+            }
+
+            if (valuesToPrompt.Contains("SSH_PRIVATE_KEY"))
+            {
+                infraInputs.Add(new InteractionInput { Name = "sshPrivateKey", Label = "SSH Private Key", InputType = InputType.SecretText, Required = true });
+            }
+
+            if (valuesToPrompt.Contains("SSH_KEY_PASSPHRASE"))
+            {
+                infraInputs.Add(new InteractionInput { Name = "sshKeyPassphrase", Label = "SSH Key Passphrase", InputType = InputType.SecretText, Required = true });
+            }
+
+            if (valuesToPrompt.Contains("SSH_PASSWORD"))
+            {
+                infraInputs.Add(new InteractionInput { Name = "sshPassword", Label = "SSH Password", InputType = InputType.SecretText, Required = true });
+            }
+
+            var infraResult = await interactionService.PromptInputsAsync(
+                "GitHub Actions - Infrastructure",
+                "Provide SSH deployment configuration. These will be stored as GitHub environment secrets/variables.",
+                infraInputs,
+                cancellationToken: ct);
+
+            if (infraResult.Canceled)
+            {
+                throw new OperationCanceledException("Configuration canceled");
+            }
+
+            // Map the results (only for values we prompted for)
+            if (valuesToPrompt.Contains("TARGET_HOST") && !string.IsNullOrEmpty(infraResult.Data["targetHost"].Value))
+            {
+                collectedValues["TARGET_HOST"] = infraResult.Data["targetHost"].Value!;
+            }
+
+            if (valuesToPrompt.Contains("SSH_USERNAME") && !string.IsNullOrEmpty(infraResult.Data["sshUsername"].Value))
+            {
+                collectedValues["SSH_USERNAME"] = infraResult.Data["sshUsername"].Value!;
+            }
+
+            if (valuesToPrompt.Contains("SSH_PRIVATE_KEY") && !string.IsNullOrEmpty(infraResult.Data["sshPrivateKey"].Value))
+            {
+                collectedValues["SSH_PRIVATE_KEY"] = infraResult.Data["sshPrivateKey"].Value!;
+            }
+
+            if (valuesToPrompt.Contains("SSH_KEY_PASSPHRASE") && !string.IsNullOrEmpty(infraResult.Data["sshKeyPassphrase"].Value))
+            {
+                collectedValues["SSH_KEY_PASSPHRASE"] = infraResult.Data["sshKeyPassphrase"].Value!;
+            }
+
+            if (valuesToPrompt.Contains("SSH_PASSWORD") && !string.IsNullOrEmpty(infraResult.Data["sshPassword"].Value))
+            {
+                collectedValues["SSH_PASSWORD"] = infraResult.Data["sshPassword"].Value!;
+            }
+
+            await infraTask.SucceedAsync($"Collected {collectedValues.Count} infrastructure value(s)", ct);
+        }
+        else
+        {
+            await infraTask.SucceedAsync("All infrastructure values already configured", ct);
+        }
+
+        // 7. Handle orphaned values
+        if (orphanedSecrets.Count > 0 || orphanedVariables.Count > 0)
+        {
+            var orphanList = orphanedSecrets.Select(s => $"  - Secret: {s}")
+                .Concat(orphanedVariables.Select(v => $"  - Variable: {v}"))
+                .ToList();
+
+            var deleteResult = await interactionService.PromptConfirmationAsync(
+                "Orphaned GitHub Values",
+                $"The following secrets/variables are no longer needed:\n{string.Join("\n", orphanList)}\n\nDelete them?",
+                cancellationToken: ct);
+
+            if (!deleteResult.Canceled && deleteResult.Data)
+            {
+                await using var deleteTask = await step.CreateTaskAsync("Deleting orphaned values", ct);
+                foreach (var secret in orphanedSecrets)
+                {
+                    await _gitHubActionsGeneratorService.DeleteEnvironmentSecretAsync(environmentName, secret, ct);
+                }
+
+                foreach (var variable in orphanedVariables)
+                {
+                    await _gitHubActionsGeneratorService.DeleteEnvironmentVariableAsync(environmentName, variable, ct);
+                }
+
+                await deleteTask.SucceedAsync($"Deleted {orphanedSecrets.Count + orphanedVariables.Count} orphaned value(s)", ct);
+            }
+        }
+
+        // 8. Create/update GitHub environment and set values
+        await using var ghTask = await step.CreateTaskAsync($"Configuring GitHub environment '{environmentName}'", ct);
+
+        // Create the environment first (idempotent)
+        await _gitHubActionsGeneratorService.CreateEnvironmentAsync(environmentName, ct);
+
+        // Set only the values that were collected
+        foreach (var (name, value) in collectedValues)
+        {
+            var isSecret = name != "TARGET_HOST";
+            await _gitHubActionsGeneratorService.SetEnvironmentValueAsync(environmentName, name, value, isSecret, ct);
+        }
+
+        // Set parameter values in GitHub (only if they have values and need updating)
+        foreach (var info in parameterInfos)
+        {
+            if (!string.IsNullOrEmpty(info.Value))
+            {
+                // For parameters, we always set them (they come from the model)
+                await _gitHubActionsGeneratorService.SetEnvironmentValueAsync(environmentName, info.GitHubName, info.Value, info.IsSecret, ct);
+            }
+        }
+
+        await ghTask.SucceedAsync($"GitHub environment '{environmentName}' configured", ct);
+
+        // 9. Generate workflow YAML (with overwrite confirmation)
+        var workflowDir = Path.Combine(repoRoot, ".github", "workflows");
+        Directory.CreateDirectory(workflowDir);
+
+        var outputPath = Path.Combine(workflowDir, $"deploy-{environmentName}.yml");
+
+        if (File.Exists(outputPath))
+        {
+            var overwriteFileResult = await interactionService.PromptConfirmationAsync(
+                "Workflow File Exists",
+                $"The workflow file already exists at:\n{outputPath}\n\nOverwrite it?",
+                cancellationToken: ct);
+
+            if (overwriteFileResult.Canceled || !overwriteFileResult.Data)
+            {
+                await step.SucceedAsync($"Workflow generation skipped (file exists at {outputPath})");
+                return;
+            }
+        }
+
+        var appHostPath = Path.GetRelativePath(repoRoot, _hostEnvironment.ContentRootPath);
+        var options = new WorkflowGenerationOptions(environmentName, "10.0.x", appHostPath, parameterInfos, sshAuthType);
+
+        var content = _gitHubActionsGeneratorService.GenerateStandaloneWorkflow(options);
+        await File.WriteAllTextAsync(outputPath, content, ct);
+
+        await step.SucceedAsync($"Generated workflow at {outputPath}");
+    }
+
+    // Infrastructure secrets required for each auth type
+    private static HashSet<string> GetRequiredInfraSecrets(SshAuthType authType) => authType switch
+    {
+        SshAuthType.Key => ["SSH_USERNAME", "SSH_PRIVATE_KEY"],
+        SshAuthType.KeyWithPassphrase => ["SSH_USERNAME", "SSH_PRIVATE_KEY", "SSH_KEY_PASSPHRASE"],
+        SshAuthType.Password => ["SSH_USERNAME", "SSH_PASSWORD"],
+        _ => []
+    };
+
+    // All possible infrastructure secrets (for orphan detection)
+    private static readonly HashSet<string> AllPossibleInfraSecrets =
+        ["SSH_USERNAME", "SSH_PRIVATE_KEY", "SSH_KEY_PASSPHRASE", "SSH_PASSWORD"];
 
     private async Task CheckPrerequisitesConcurrently(PipelineStepContext context)
     {
