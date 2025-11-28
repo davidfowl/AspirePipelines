@@ -157,6 +157,66 @@ To show IP addresses:
 export UNSAFE_SHOW_TARGET_HOST=true
 ```
 
+## CI/CD with GitHub Actions
+
+Generate a GitHub Actions workflow that deploys on every push to `main`:
+
+```bash
+aspire do gh-action-{environment-name}
+```
+
+For example, if your Docker Compose environment is named `env`:
+
+```bash
+aspire do gh-action-env
+```
+
+This command:
+1. Creates a GitHub environment with your deployment settings
+2. Stores SSH credentials and parameters as GitHub secrets/variables
+3. Generates a workflow file (`.github/workflows/deploy-{name}.yml`)
+
+### Prerequisites
+
+- GitHub CLI (`gh`) installed and authenticated (`gh auth login`)
+- Current directory is a GitHub repository with a remote
+
+### What Gets Created
+
+**GitHub Environment** with:
+- `TARGET_HOST` (variable) - Your server hostname/IP
+- `SSH_USERNAME` (secret) - SSH username
+- `SSH_PRIVATE_KEY` (secret) - SSH private key contents (for key auth)
+- `SSH_PASSWORD` (secret) - SSH password (for password auth)
+- `SSH_KEY_PASSPHRASE` (secret) - Key passphrase (if applicable)
+- Any application parameters defined in your AppHost
+
+**Workflow File** that:
+- Triggers on push to `main` and manual dispatch
+- Uses GitHub Container Registry (`ghcr.io`)
+- Handles SSH authentication automatically
+- Runs `aspire deploy` with environment variables
+
+### Re-running the Command
+
+Running `aspire do gh-action-{name}` again will:
+1. Detect existing secrets/variables
+2. Prompt whether to overwrite existing values
+3. Update only what you choose to change
+
+### Generated Workflow
+
+The workflow uses environment variables to configure the deployment:
+
+```yaml
+env:
+  DockerSSH__TargetHost: ${{ vars.TARGET_HOST }}
+  DockerSSH__SshUsername: ${{ secrets.SSH_USERNAME }}
+  DockerSSH__SshKeyPath: ${{ github.workspace }}/.ssh/id_rsa
+  DockerRegistry__RegistryUrl: ghcr.io
+  DockerRegistry__RepositoryPrefix: ${{ github.repository_owner }}
+```
+
 ## Links
 
 - [GitHub Repository](https://github.com/davidfowl/AspirePipelines)
