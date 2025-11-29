@@ -51,6 +51,15 @@ internal interface IRemoteDockerComposeService
     Task<string> GetLogsAsync(string deployPath, int tailLines, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Gets diagnostic logs for a specific service/container.
+    /// </summary>
+    /// <param name="containerName">The container name (from ComposeServiceInfo.Name)</param>
+    /// <param name="tailLines">Number of lines to retrieve from the end of the logs</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    /// <returns>The log output</returns>
+    Task<string> GetServiceLogsAsync(string containerName, int tailLines, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Gets the current status of all services using docker compose ps --format json.
     /// </summary>
     /// <param name="deployPath">Path to the deployment directory containing docker-compose.yaml</param>

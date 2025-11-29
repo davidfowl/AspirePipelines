@@ -144,6 +144,12 @@ internal class FakeRemoteDockerComposeService : IRemoteDockerComposeService
         return Task.FromResult(_logsOutput);
     }
 
+    public Task<string> GetServiceLogsAsync(string containerName, int tailLines, CancellationToken cancellationToken)
+    {
+        _operations.Add(new ComposeOperation("GetServiceLogs", containerName, tailLines));
+        return Task.FromResult(_logsOutput);
+    }
+
     public Task<ComposeStatus> GetStatusAsync(string deployPath, string host, CancellationToken cancellationToken)
     {
         _operations.Add(new ComposeOperation("GetStatus", deployPath));
@@ -152,6 +158,7 @@ internal class FakeRemoteDockerComposeService : IRemoteDockerComposeService
             TotalServices: 0,
             HealthyServices: 0,
             UnhealthyServices: 0,
+            FailedServices: 0,
             ServiceUrls: new Dictionary<string, List<string>>()));
     }
 

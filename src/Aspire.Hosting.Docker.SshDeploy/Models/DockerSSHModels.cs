@@ -51,11 +51,14 @@ internal class ComposeServiceInfo
     public string State { get; set; } = "";
     public string Status { get; set; } = "";
     public string Health { get; set; } = "";
+    public int ExitCode { get; set; }
     public List<ComposePortPublisher> Publishers { get; set; } = [];
 
     public bool IsHealthy => State.Equals("running", StringComparison.OrdinalIgnoreCase);
-    public bool IsTerminal => State.Equals("exited", StringComparison.OrdinalIgnoreCase)
-                           || State.Equals("dead", StringComparison.OrdinalIgnoreCase);
+    public bool IsExited => State.Equals("exited", StringComparison.OrdinalIgnoreCase);
+    public bool IsDead => State.Equals("dead", StringComparison.OrdinalIgnoreCase);
+    public bool IsTerminal => IsExited || IsDead;
+    public bool IsFailed => (IsExited && ExitCode != 0) || IsDead;
 }
 
 /// <summary>
@@ -77,4 +80,5 @@ internal record ComposeStatus(
     int TotalServices,
     int HealthyServices,
     int UnhealthyServices,
+    int FailedServices,
     Dictionary<string, List<string>> ServiceUrls);

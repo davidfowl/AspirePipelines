@@ -110,9 +110,13 @@ internal class DockerSSHPipeline(
         var deploy = new PipelineStep { Name = $"remote-docker-deploy-{DockerComposeEnvironment.Name}", Action = DeployApplicationStep };
         deploy.DependsOn(transferExtraFiles);
 
+        // Health check (depends on deploy, verifies containers are healthy)
+        var healthCheck = new PipelineStep { Name = $"health-check-{DockerComposeEnvironment.Name}", Action = HealthCheckStep };
+        healthCheck.DependsOn(deploy);
+
         // Extract dashboard login token from logs
         var extractDashboardToken = new PipelineStep { Name = $"extract-dashboard-token-{DockerComposeEnvironment.Name}", Action = ExtractDashboardLoginTokenStep };
-        extractDashboardToken.DependsOn(deploy);
+        extractDashboardToken.DependsOn(healthCheck);
 
         // Cleanup SSH/SCP connections
         var cleanup = new PipelineStep { Name = $"cleanup-ssh-{DockerComposeEnvironment.Name}", Action = CleanupSSHConnectionStep };
@@ -133,7 +137,7 @@ internal class DockerSSHPipeline(
         teardown.DependsOn(establishSsh);
         teardown.DependsOn(configureDeployment);
 
-        return [prereqs, establishSsh, configureRegistry, configureDeployment, prepareRemote, pushImages, mergeEnv, transferFiles, transferExtraFiles, deploy, extractDashboardToken, cleanup, deploySshStep, generateGitHubWorkflow, teardown];
+        return [prereqs, establishSsh, configureRegistry, configureDeployment, prepareRemote, pushImages, mergeEnv, transferFiles, transferExtraFiles, deploy, healthCheck, extractDashboardToken, cleanup, deploySshStep, generateGitHubWorkflow, teardown];
     }
 
     public Task ConfigurePipelineAsync(PipelineConfigurationContext context)
@@ -547,15 +551,55 @@ internal class DockerSSHPipeline(
         await RemoteOperationsFactory.DockerComposeService.StartAsync(RemoteDeployPath, context.CancellationToken);
         await startTask.SucceedAsync("New containers started", context.CancellationToken);
 
+        await step.SucceedAsync("Containers started successfully");
+    }
+
+    private async Task HealthCheckStep(PipelineStepContext context)
+    {
+        var step = context.ReportingStep;
+
         // Get target host for URLs (use original configured host, not resolved IP)
         var targetHost = _sshConnectionManager?.TargetHost
             ?? throw new InvalidOperationException("SSH connection not established");
 
-        // Monitor service health
-        await HealthCheckUtility.CheckServiceHealth(RemoteDeployPath, targetHost, RemoteOperationsFactory.DockerComposeService, step, context.Logger, context.CancellationToken);
+        // Monitor service health (waits for minimum polls to catch early crashes)
+        await HealthCheckUtility.CheckServiceHealth(RemoteDeployPath, targetHost, RemoteOperationsFactory.DockerComposeService, context.Logger, context.CancellationToken);
 
         // Get final deployment status
         var status = await RemoteOperationsFactory.DockerComposeService.GetStatusAsync(RemoteDeployPath, targetHost, context.CancellationToken);
+
+        // Check for failed containers and show their logs
+        var failedServices = status.Services.Where(s => s.IsFailed).ToList();
+        if (failedServices.Count > 0)
+        {
+            context.Logger.LogError("{FailedCount} container(s) failed:", failedServices.Count);
+
+            foreach (var failed in failedServices)
+            {
+                context.Logger.LogError("  - {Service}: {State} (exit code {ExitCode})",
+                    failed.Service, failed.State, failed.ExitCode);
+
+                // Get logs for the failed container
+                try
+                {
+                    var logs = await RemoteOperationsFactory.DockerComposeService.GetServiceLogsAsync(
+                        failed.Name, 50, context.CancellationToken);
+
+                    if (!string.IsNullOrWhiteSpace(logs))
+                    {
+                        context.Logger.LogError("Logs for {Service}:\n{Logs}", failed.Service, logs);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    context.Logger.LogDebug(ex, "Failed to get logs for {Service}", failed.Service);
+                }
+            }
+
+            throw new InvalidOperationException(
+                $"Deployment failed: {failedServices.Count} container(s) exited with errors. " +
+                $"Services: {string.Join(", ", failedServices.Select(s => $"{s.Service} (exit {s.ExitCode})"))}");
+        }
 
         // Find dashboard container name (docker logs needs container name, not service name)
         var dashboardService = status.Services.FirstOrDefault(
@@ -575,7 +619,7 @@ internal class DockerSSHPipeline(
         context.Logger.LogInformation("Services running: {HealthyServices} of {TotalServices} containers healthy.\n{ServiceTable}",
             status.HealthyServices, status.TotalServices, serviceTable);
 
-        await step.SucceedAsync($"Application deployed successfully! Services running: {status.HealthyServices} of {status.TotalServices} containers healthy.");
+        await step.SucceedAsync($"All services healthy: {status.HealthyServices} of {status.TotalServices} containers running.");
     }
     #endregion
 

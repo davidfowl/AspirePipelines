@@ -48,7 +48,7 @@ public class DockerCommandExecutorTests
     {
         // Arrange
         var fakeExecutor = new FakeProcessExecutor();
-        fakeExecutor.ConfigureResult("docker-compose --version", new ProcessResult(0, "docker-compose version 2.0.0", ""));
+        fakeExecutor.ConfigureResult("docker compose --version", new ProcessResult(0, "Docker Compose version v2.0.0", ""));
 
         var utility = new DockerCommandExecutor(fakeExecutor);
 
@@ -57,8 +57,8 @@ public class DockerCommandExecutorTests
 
         // Assert
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("docker-compose version 2.0.0", result.Output);
-        Assert.True(fakeExecutor.WasCalled("docker-compose", "--version"));
+        Assert.Equal("Docker Compose version v2.0.0", result.Output);
+        Assert.True(fakeExecutor.WasCalled("docker", "compose --version"));
     }
 
     [Fact]
@@ -125,6 +125,6 @@ public class DockerCommandExecutorTests
         Assert.Equal(3, fakeExecutor.Calls.Count);
         Assert.True(fakeExecutor.WasCalled("docker", "version"));
         Assert.True(fakeExecutor.WasCalled("docker", "ps"));
-        Assert.True(fakeExecutor.WasCalled("docker-compose", "up"));
+        Assert.True(fakeExecutor.WasCalled("docker", "compose up"));
     }
 }

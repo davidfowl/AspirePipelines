@@ -1,8 +1,6 @@
 #pragma warning disable ASPIREPIPELINES001
 
 using Aspire.Hosting.Docker.SshDeploy.Abstractions;
-using Aspire.Hosting.Docker.SshDeploy.Models;
-using Aspire.Hosting.Pipelines;
 using Microsoft.Extensions.Logging;
 
 namespace Aspire.Hosting.Docker.SshDeploy.Utilities;
@@ -13,11 +11,11 @@ internal static class HealthCheckUtility
         string deployPath,
         string host,
         IRemoteDockerComposeService dockerComposeService,
-        IReportingStep step,
         ILogger logger,
         CancellationToken cancellationToken,
         TimeSpan? maxWaitTime = null,
-        TimeSpan? checkInterval = null)
+        TimeSpan? checkInterval = null,
+        int minimumPolls = 2)
     {
         var maxWait = maxWaitTime ?? TimeSpan.FromMinutes(5);
         var interval = checkInterval ?? TimeSpan.FromSeconds(10);
@@ -29,7 +27,6 @@ internal static class HealthCheckUtility
 
         var startTime = DateTime.UtcNow;
         var pollCount = 0;
-        ComposeStatus? finalStatus = null;
 
         try
         {
@@ -55,10 +52,9 @@ internal static class HealthCheckUtility
                     pollCount, elapsed.TotalSeconds, status.HealthyServices, status.TotalServices,
                     status.Services.Count(s => s.IsTerminal));
 
-                finalStatus = status;
-
                 // Check if all services are healthy or in terminal state
-                if (status.Services.All(s => s.IsHealthy || s.IsTerminal))
+                // Require minimum polls to catch containers that crash shortly after starting
+                if (pollCount >= minimumPolls && status.Services.All(s => s.IsHealthy || s.IsTerminal))
                 {
                     logger.LogDebug("All services reached final state after {Elapsed:F1}s ({PollCount} polls)",
                         elapsed.TotalSeconds, pollCount);
@@ -72,56 +68,6 @@ internal static class HealthCheckUtility
         }
 
         var totalElapsed = DateTime.UtcNow - startTime;
-
-        // Report final status
-        if (finalStatus != null)
-        {
-            var hasAnyFailures = false;
-            foreach (var service in finalStatus.Services)
-            {
-                ReportServiceStatus(service, logger, out var hasFailure);
-                hasAnyFailures = hasAnyFailures || hasFailure;
-            }
-
-            logger.LogInformation("Health check completed after {Elapsed:F1}s ({PollCount} polls)", totalElapsed.TotalSeconds, pollCount);
-
-            if (hasAnyFailures)
-            {
-                throw new InvalidOperationException("One or more services failed health checks");
-            }
-        }
-    }
-
-    private static void ReportServiceStatus(ComposeServiceInfo service, ILogger logger, out bool hasFailure)
-    {
-        hasFailure = false;
-
-        if (service.IsHealthy)
-        {
-            logger.LogDebug("Service {ServiceName} is healthy - State: {State}, Status: {Status}",
-                service.Service, service.State, service.Status);
-        }
-        else if (service.IsTerminal)
-        {
-            // Check if it's a successful exit (exit code 0)
-            var isSuccessfulExit = service.Status.Contains("(0)") || service.Status.Contains("exit 0");
-
-            if (isSuccessfulExit)
-            {
-                logger.LogDebug("Service {ServiceName} completed successfully - State: {State}", service.Service, service.State);
-            }
-            else
-            {
-                logger.LogError("Service {ServiceName} terminated unexpectedly - State: {State}, Status: {Status}",
-                    service.Service, service.State, service.Status);
-                hasFailure = true;
-            }
-        }
-        else
-        {
-            logger.LogError("Service {ServiceName} failed to become healthy - State: {State}, Status: {Status}",
-                service.Service, service.State, service.Status);
-            hasFailure = true;
-        }
+        logger.LogDebug("Health check completed after {Elapsed:F1}s ({PollCount} polls)", totalElapsed.TotalSeconds, pollCount);
     }
 }

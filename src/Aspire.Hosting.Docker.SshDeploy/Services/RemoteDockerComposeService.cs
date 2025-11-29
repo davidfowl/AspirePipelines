@@ -141,13 +141,27 @@ internal class RemoteDockerComposeService : IRemoteDockerComposeService
         return result.Output;
     }
 
+    public async Task<string> GetServiceLogsAsync(string containerName, int tailLines, CancellationToken cancellationToken)
+    {
+        _logger.LogDebug("Getting logs for container {ContainerName}, tail={TailLines}", containerName, tailLines);
+
+        var result = await _sshConnectionManager.ExecuteCommandWithOutputAsync(
+            $"docker logs --tail {tailLines} {containerName} 2>&1",
+            cancellationToken);
+
+        _logger.LogDebug("Retrieved {Length} characters of logs for {ContainerName}", result.Output.Length, containerName);
+
+        return result.Output;
+    }
+
     public async Task<ComposeStatus> GetStatusAsync(string deployPath, string host, CancellationToken cancellationToken)
     {
         _logger.LogDebug("Getting service status from {DeployPath}", deployPath);
 
         // Use double quotes to allow shell variable expansion (e.g., $HOME)
+        // Use -a to include stopped/exited containers
         var result = await _sshConnectionManager.ExecuteCommandWithOutputAsync(
-            $"cd \"{deployPath}\" && docker compose ps --format json",
+            $"cd \"{deployPath}\" && docker compose ps -a --format json",
             cancellationToken);
 
         var services = new List<ComposeServiceInfo>();
@@ -198,6 +212,7 @@ internal class RemoteDockerComposeService : IRemoteDockerComposeService
             TotalServices: services.Count,
             HealthyServices: services.Count(s => s.IsHealthy),
             UnhealthyServices: services.Count(s => !s.IsHealthy),
+            FailedServices: services.Count(s => s.IsFailed),
             ServiceUrls: serviceUrls);
     }
 
