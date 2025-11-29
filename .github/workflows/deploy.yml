@@ -1,4 +1,4 @@
-name: Deploy to VPS
+name: Deploy (Digital Ocean)
 
 on:
   workflow_dispatch:
@@ -13,16 +13,6 @@ jobs:
       contents: read
       packages: write
     steps:
-      - name: Validate required configuration
-        run: |
-          missing=""
-          [ -z "${{ vars.TARGET_HOST }}" ] && missing="$missing TARGET_HOST"
-          [ -z "${{ secrets.SSH_PRIVATE_KEY }}" ] && missing="$missing SSH_PRIVATE_KEY"
-          if [ -n "$missing" ]; then
-            echo "::error::Missing required configuration:$missing"
-            exit 1
-          fi
-
       - uses: actions/checkout@v4
 
       - name: Check TLS secrets
@@ -51,27 +41,26 @@ jobs:
       - name: Install Aspire CLI
         run: curl -sSL https://aspire.dev/install.sh | bash
 
-      - name: Setup SSH key
-        run: |
-          mkdir -p ${{ github.workspace }}/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ${{ github.workspace }}/.ssh/id_rsa
-          chmod 600 ${{ github.workspace }}/.ssh/id_rsa
-          ssh-keyscan -H ${{ vars.TARGET_HOST }} >> ${{ github.workspace }}/.ssh/known_hosts
+      - name: Setup SSH agent
+        uses: webfactory/ssh-agent@v0.9.1
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Add known hosts
+        run: ssh-keyscan -H ${{ vars.TARGET_HOST }} >> ~/.ssh/known_hosts
 
       - name: Set short SHA
         run: echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
 
       - name: Deploy
-        run: aspire deploy --log-level debug
+        run: aspire deploy
         env:
           DockerSSH__TargetHost: ${{ vars.TARGET_HOST }}
-          DockerSSH__SshUsername: ${{ secrets.VPS_USERNAME }}
-          DockerSSH__SshKeyPath: ${{ github.workspace }}/.ssh/id_rsa
+          DockerSSH__SshUsername: ${{ secrets.SSH_USERNAME }}
           DockerRegistry__RegistryUrl: ghcr.io
           DockerRegistry__RepositoryPrefix: ${{ github.repository_owner }}
           DockerRegistry__RegistryUsername: ${{ github.actor }}
           DockerRegistry__RegistryPassword: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_TAG_SUFFIX: build.${{ github.run_number }}.${{ env.SHORT_SHA }}
           Parameters__p: hello
           Parameters__cache_password: ${{ secrets.CACHE_PASSWORD }}
-          # Image tag format: build.{run_number}.{short_sha} (e.g., build.42.abc1234)
-          IMAGE_TAG_SUFFIX: build.${{ github.run_number }}.${{ env.SHORT_SHA }}

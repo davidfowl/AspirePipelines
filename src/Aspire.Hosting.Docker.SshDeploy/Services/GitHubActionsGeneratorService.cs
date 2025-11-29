@@ -266,7 +266,7 @@ internal class GitHubActionsGeneratorService
         {
             // Use ssh-agent action for key-based authentication
             sb.AppendLine("      - name: Setup SSH agent");
-            sb.AppendLine("        uses: webfactory/ssh-agent@v0.9.0");
+            sb.AppendLine("        uses: webfactory/ssh-agent@v0.9.1");
             sb.AppendLine("        with:");
             sb.AppendLine("          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}");
             sb.AppendLine();
