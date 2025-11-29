@@ -177,7 +177,8 @@ internal class DockerRegistryService
 
         if (!string.IsNullOrWhiteSpace(registryUrl) && !string.IsNullOrWhiteSpace(repositoryPrefix))
         {
-            return new RegistryConfiguration(registryUrl, repositoryPrefix, registryUsername, registryPassword);
+            // Docker image names must be lowercase
+            return new RegistryConfiguration(registryUrl, repositoryPrefix.ToLowerInvariant(), registryUsername, registryPassword);
         }
 
         return null;
@@ -215,7 +216,8 @@ internal class DockerRegistryService
         }
 
         var registryUrl = result.Data["registryUrl"].Value ?? throw new InvalidOperationException("Registry URL is required");
-        var repositoryPrefix = result.Data["repositoryPrefix"].Value?.Trim();
+        // Docker image names must be lowercase
+        var repositoryPrefix = result.Data["repositoryPrefix"].Value?.Trim()?.ToLowerInvariant();
         var registryUsername = result.Data["registryUsername"].Value;
         var registryPassword = result.Data["registryPassword"].Value;
 
