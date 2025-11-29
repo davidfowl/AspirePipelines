@@ -29,7 +29,8 @@ var frontend = builder.AddProject<Projects.DockerPipelinesSample_Web>("webfronte
     .WithReference(cache)
     .WaitFor(cache)
     .WithReference(apiService)
-    .WaitFor(apiService);
+    .WaitFor(apiService)
+    .WithEnvironment("IMAGE_TAG_SUFFIX", imageTag ?? "local");
 
 var yarp = builder.AddYarp("gateway")
       .WithConfiguration(c =>
