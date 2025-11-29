@@ -495,6 +495,27 @@ internal class DockerSSHPipeline(
             await stopTask.SucceedAsync("No containers to stop or stop completed", context.CancellationToken);
         }
 
+        // Authenticate with registry on remote (for private repos)
+        if (!string.IsNullOrEmpty(RegistryConfig.RegistryUsername) &&
+            !string.IsNullOrEmpty(RegistryConfig.RegistryPassword))
+        {
+            await using var loginTask = await step.CreateTaskAsync("Authenticating with registry on remote", context.CancellationToken);
+            context.Logger.LogDebug("Logging into {RegistryUrl} on remote server...", RegistryConfig.RegistryUrl);
+
+            var loginResult = await RemoteOperationsFactory.DockerComposeService.LoginToRegistryAsync(
+                RegistryConfig.RegistryUrl,
+                RegistryConfig.RegistryUsername,
+                RegistryConfig.RegistryPassword,
+                context.CancellationToken);
+
+            if (!loginResult.Success)
+            {
+                throw new InvalidOperationException($"Failed to authenticate with {RegistryConfig.RegistryUrl} on remote server: {loginResult.Error}");
+            }
+
+            await loginTask.SucceedAsync($"Authenticated with {RegistryConfig.RegistryUrl}", context.CancellationToken);
+        }
+
         // Pull latest images
         await using var pullTask = await step.CreateTaskAsync("Pulling latest images", context.CancellationToken);
         context.Logger.LogDebug("Pulling latest container images...");

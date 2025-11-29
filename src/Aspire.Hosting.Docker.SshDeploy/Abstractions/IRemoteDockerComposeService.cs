@@ -24,6 +24,16 @@ internal interface IRemoteDockerComposeService
     Task<ComposeOperationResult> PullImagesAsync(string deployPath, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Authenticates with a container registry on the remote server.
+    /// </summary>
+    /// <param name="registryUrl">The registry URL (e.g., ghcr.io, docker.io)</param>
+    /// <param name="username">Registry username</param>
+    /// <param name="password">Registry password or token</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    /// <returns>Result of the login operation</returns>
+    Task<ComposeOperationResult> LoginToRegistryAsync(string registryUrl, string username, string password, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Starts all services in a Docker Compose deployment.
     /// </summary>
     /// <param name="deployPath">Path to the deployment directory containing docker-compose.yaml</param>

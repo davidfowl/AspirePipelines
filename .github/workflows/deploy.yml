@@ -51,9 +51,6 @@ jobs:
       - name: Install Aspire CLI
         run: curl -sSL https://aspire.dev/install.sh | bash
 
-      - name: Login to GitHub Container Registry
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-
       - name: Setup SSH key
         run: |
           mkdir -p ${{ github.workspace }}/.ssh
@@ -72,6 +69,8 @@ jobs:
           DockerSSH__SshKeyPath: ${{ github.workspace }}/.ssh/id_rsa
           DockerRegistry__RegistryUrl: ghcr.io
           DockerRegistry__RepositoryPrefix: ${{ github.repository_owner }}
+          DockerRegistry__RegistryUsername: ${{ github.actor }}
+          DockerRegistry__RegistryPassword: ${{ secrets.GITHUB_TOKEN }}
           Parameters__p: hello
           Parameters__cache_password: ${{ secrets.CACHE_PASSWORD }}
           # Image tag format: build.{run_number}.{short_sha} (e.g., build.42.abc1234)

@@ -63,6 +63,41 @@ internal class RemoteDockerComposeService : IRemoteDockerComposeService
             Success: result.ExitCode == 0);
     }
 
+    public async Task<ComposeOperationResult> LoginToRegistryAsync(
+        string registryUrl,
+        string username,
+        string password,
+        CancellationToken cancellationToken)
+    {
+        _logger.LogDebug("Logging into registry {RegistryUrl} on remote", registryUrl);
+
+        // Use --password-stdin to avoid password in command line/logs
+        // Escape single quotes in password for shell safety
+        var escapedPassword = password.Replace("'", "'\"'\"'");
+        var result = await _sshConnectionManager.ExecuteCommandWithOutputAsync(
+            $"echo '{escapedPassword}' | docker login {registryUrl} -u {username} --password-stdin",
+            cancellationToken);
+
+        if (result.ExitCode == 0)
+        {
+            _logger.LogDebug("Successfully logged into registry {RegistryUrl} on remote", registryUrl);
+        }
+        else
+        {
+            _logger.LogWarning(
+                "Failed to login to registry {RegistryUrl} on remote (exit code {ExitCode}): {Error}",
+                registryUrl,
+                result.ExitCode,
+                result.Error);
+        }
+
+        return new ComposeOperationResult(
+            ExitCode: result.ExitCode,
+            Output: result.Output,
+            Error: result.Error,
+            Success: result.ExitCode == 0);
+    }
+
     public async Task<ComposeOperationResult> StartAsync(string deployPath, CancellationToken cancellationToken)
     {
         _logger.LogDebug("Starting containers in {DeployPath}", deployPath);

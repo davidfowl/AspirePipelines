@@ -260,9 +260,6 @@ internal class GitHubActionsGeneratorService
         sb.AppendLine("      - name: Install Aspire CLI");
         sb.AppendLine("        run: curl -sSL https://aspire.dev/install.sh | bash");
         sb.AppendLine();
-        sb.AppendLine("      - name: Login to Container Registry");
-        sb.AppendLine("        run: echo \"${{ secrets.GITHUB_TOKEN }}\" | docker login ghcr.io -u ${{ github.actor }} --password-stdin");
-        sb.AppendLine();
 
         // SSH setup depends on auth type
         if (options.SshAuthType is SshAuthType.Key or SshAuthType.KeyWithPassphrase)
@@ -312,6 +309,8 @@ internal class GitHubActionsGeneratorService
 
         sb.AppendLine("          DockerRegistry__RegistryUrl: ghcr.io");
         sb.AppendLine("          DockerRegistry__RepositoryPrefix: ${{ github.repository_owner }}");
+        sb.AppendLine("          DockerRegistry__RegistryUsername: ${{ github.actor }}");
+        sb.AppendLine("          DockerRegistry__RegistryPassword: ${{ secrets.GITHUB_TOKEN }}");
         sb.AppendLine("          IMAGE_TAG_SUFFIX: build.${{ github.run_number }}.${{ env.SHORT_SHA }}");
 
         // Add detected parameters
