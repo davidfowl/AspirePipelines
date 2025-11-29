@@ -58,7 +58,7 @@ jobs:
           DockerSSH__TargetHost: ${{ vars.TARGET_HOST }}
           DockerSSH__SshUsername: ${{ secrets.VPS_USERNAME }}
           DockerRegistry__RegistryUrl: ghcr.io
-          DockerRegistry__RepositoryPrefix: ${{ github.repository_owner }}
+          DockerRegistry__RepositoryPrefix: ${{ github.repository }}
           DockerRegistry__RegistryUsername: ${{ github.actor }}
           DockerRegistry__RegistryPassword: ${{ secrets.GITHUB_TOKEN }}
           IMAGE_TAG_SUFFIX: build.${{ github.run_number }}.${{ env.SHORT_SHA }}

@@ -305,7 +305,7 @@ internal class GitHubActionsGeneratorService
         }
 
         sb.AppendLine("          DockerRegistry__RegistryUrl: ghcr.io");
-        sb.AppendLine("          DockerRegistry__RepositoryPrefix: ${{ github.repository_owner }}");
+        sb.AppendLine("          DockerRegistry__RepositoryPrefix: ${{ github.repository }}");
         sb.AppendLine("          DockerRegistry__RegistryUsername: ${{ github.actor }}");
         sb.AppendLine("          DockerRegistry__RegistryPassword: ${{ secrets.GITHUB_TOKEN }}");
         sb.AppendLine("          IMAGE_TAG_SUFFIX: build.${{ github.run_number }}.${{ env.SHORT_SHA }}");
