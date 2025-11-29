@@ -35,7 +35,7 @@ internal class DockerCommandExecutor
     /// </summary>
     public async Task<(int ExitCode, string Output, string Error)> ExecuteDockerComposeCommand(string arguments, CancellationToken cancellationToken)
     {
-        return await ExecuteProcessAsync("docker-compose", arguments, cancellationToken);
+        return await ExecuteProcessAsync("docker", $"compose {arguments}", cancellationToken);
     }
 
     /// <summary>
@@ -102,18 +102,7 @@ internal class DockerCommandExecutor
             }
             else
             {
-                // Try legacy docker-compose command
-                var legacyResult = await ExecuteDockerComposeCommand("--version", cancellationToken);
-
-                if (legacyResult.ExitCode == 0 && !string.IsNullOrEmpty(legacyResult.Output))
-                {
-                    var versionLine = legacyResult.Output.Split('\n').FirstOrDefault()?.Trim();
-                    await task.SucceedAsync($"Docker Compose (legacy) is available: {versionLine}", cancellationToken: cancellationToken);
-                }
-                else
-                {
-                    throw new InvalidOperationException("Docker Compose is required for this deployment");
-                }
+                throw new InvalidOperationException("Docker Compose is required for this deployment. Ensure 'docker compose' command is available.");
             }
         }
         catch (Exception ex)

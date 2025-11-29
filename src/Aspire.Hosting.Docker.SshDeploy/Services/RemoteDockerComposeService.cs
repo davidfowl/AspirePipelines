@@ -29,7 +29,7 @@ internal class RemoteDockerComposeService : IRemoteDockerComposeService
 
         // Use double quotes to allow shell variable expansion (e.g., $HOME)
         var result = await _sshConnectionManager.ExecuteCommandWithOutputAsync(
-            $"cd \"{deployPath}\" && (docker compose down || docker-compose down || true)",
+            $"cd \"{deployPath}\" && docker compose down",
             cancellationToken);
 
         _logger.LogDebug(
@@ -49,7 +49,7 @@ internal class RemoteDockerComposeService : IRemoteDockerComposeService
 
         // Use double quotes to allow shell variable expansion (e.g., $HOME)
         var result = await _sshConnectionManager.ExecuteCommandWithOutputAsync(
-            $"cd \"{deployPath}\" && (docker compose pull || docker-compose pull || true)",
+            $"cd \"{deployPath}\" && docker compose pull",
             cancellationToken);
 
         _logger.LogDebug(
@@ -104,7 +104,7 @@ internal class RemoteDockerComposeService : IRemoteDockerComposeService
 
         // Use double quotes to allow shell variable expansion (e.g., $HOME)
         var result = await _sshConnectionManager.ExecuteCommandWithOutputAsync(
-            $"cd \"{deployPath}\" && (docker compose up -d || docker-compose up -d)",
+            $"cd \"{deployPath}\" && docker compose up -d",
             cancellationToken);
 
         if (result.ExitCode != 0)
@@ -133,7 +133,7 @@ internal class RemoteDockerComposeService : IRemoteDockerComposeService
 
         // Use double quotes to allow shell variable expansion (e.g., $HOME)
         var result = await _sshConnectionManager.ExecuteCommandWithOutputAsync(
-            $"cd \"{deployPath}\" && (docker compose logs --tail={tailLines} || docker-compose logs --tail={tailLines} || true)",
+            $"cd \"{deployPath}\" && docker compose logs --tail={tailLines}",
             cancellationToken);
 
         _logger.LogDebug("Retrieved {Length} characters of logs", result.Output.Length);
