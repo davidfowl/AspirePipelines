@@ -14,6 +14,7 @@ internal class FakeRemoteDockerComposeService : IRemoteDockerComposeService
     private bool _shouldStopFail;
     private bool _shouldPullFail;
     private bool _shouldStartFail;
+    private bool _shouldLoginFail;
     private string _logsOutput = "";
 
     /// <summary>
@@ -43,6 +44,14 @@ internal class FakeRemoteDockerComposeService : IRemoteDockerComposeService
     public void ConfigureStartFailure(bool shouldFail = true)
     {
         _shouldStartFail = shouldFail;
+    }
+
+    /// <summary>
+    /// Configures the login operation to fail.
+    /// </summary>
+    public void ConfigureLoginFailure(bool shouldFail = true)
+    {
+        _shouldLoginFail = shouldFail;
     }
 
     /// <summary>
@@ -89,6 +98,26 @@ internal class FakeRemoteDockerComposeService : IRemoteDockerComposeService
         return Task.FromResult(new ComposeOperationResult(
             ExitCode: 0,
             Output: "Images pulled",
+            Error: "",
+            Success: true));
+    }
+
+    public Task<ComposeOperationResult> LoginToRegistryAsync(string registryUrl, string username, string password, CancellationToken cancellationToken)
+    {
+        _operations.Add(new ComposeOperation("Login", registryUrl, Username: username));
+
+        if (_shouldLoginFail)
+        {
+            return Task.FromResult(new ComposeOperationResult(
+                ExitCode: 1,
+                Output: "",
+                Error: "Login failed (configured to fail)",
+                Success: false));
+        }
+
+        return Task.FromResult(new ComposeOperationResult(
+            ExitCode: 0,
+            Output: "Login Succeeded",
             Error: "",
             Success: true));
     }
@@ -166,4 +195,4 @@ internal class FakeRemoteDockerComposeService : IRemoteDockerComposeService
 /// <summary>
 /// Represents a recorded Docker Compose operation.
 /// </summary>
-public record ComposeOperation(string Operation, string DeployPath, int? TailLines = null);
+public record ComposeOperation(string Operation, string DeployPath, int? TailLines = null, string? Username = null);
