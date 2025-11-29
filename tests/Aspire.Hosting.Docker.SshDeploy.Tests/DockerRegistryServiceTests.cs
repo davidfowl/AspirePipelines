@@ -253,37 +253,4 @@ internal class FakeDeploymentStateManager : IDeploymentStateManager
     }
 }
 
-internal class FakeReportingStep : IReportingStep
-{
-    private readonly List<FakeReportingTask> _tasks = new();
-
-    public void Log(LogLevel logLevel, string message, bool enableMarkdown) { }
-
-    public Task CompleteAsync(string completionText, CompletionState completionState = CompletionState.Completed, CancellationToken cancellationToken = default)
-        => Task.CompletedTask;
-
-    public Task<IReportingTask> CreateTaskAsync(string description, CancellationToken cancellationToken = default)
-    {
-        var task = new FakeReportingTask(description);
-        _tasks.Add(task);
-        return Task.FromResult<IReportingTask>(task);
-    }
-
-    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-}
-
-internal class FakeReportingTask : IReportingTask
-{
-    public string Description { get; }
-
-    public FakeReportingTask(string description)
-    {
-        Description = description;
-    }
-
-    public Task UpdateAsync(string statusText, CancellationToken cancellationToken = default) => Task.CompletedTask;
-    public Task CompleteAsync(string? completionText = null, CompletionState completionState = CompletionState.Completed, CancellationToken cancellationToken = default) => Task.CompletedTask;
-    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-}
-
 #endregion

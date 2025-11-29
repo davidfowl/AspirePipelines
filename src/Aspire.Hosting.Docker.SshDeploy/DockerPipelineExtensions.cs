@@ -71,10 +71,27 @@ public static class DockerPipelineExtensions
         resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<DockerCommandExecutor>();
         resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<EnvironmentFileReader>();
         resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<SSHConfigurationDiscovery>();
-        resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<SSHConnectionFactory>();
         resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<DockerRegistryService>();
         resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<GitHubActionsGeneratorService>();
         resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<ISshKeyDiscoveryService, SshKeyDiscoveryService>();
+
+        // Register both SSH connection factory implementations
+        resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<NativeSSHConnectionFactory>();
+        resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<SSHNetConnectionFactory>();
+
+        // Register the ISSHConnectionFactory interface - selects native ssh by default, SSH.NET as fallback
+        resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<ISSHConnectionFactory>(sp =>
+        {
+            var config = sp.GetRequiredService<IConfiguration>();
+            var useLegacy = config.GetValue<bool>("DockerSSH:UseLegacySshNet", false);
+
+            if (useLegacy)
+            {
+                return sp.GetRequiredService<SSHNetConnectionFactory>();
+            }
+
+            return sp.GetRequiredService<NativeSSHConnectionFactory>();
+        });
 
         // Register DockerSSHPipeline as a keyed service (one per resource)
         resourceBuilder.ApplicationBuilder.Services.AddKeyedSingleton(
@@ -84,7 +101,7 @@ public static class DockerPipelineExtensions
                 sp.GetRequiredService<DockerCommandExecutor>(),
                 sp.GetRequiredService<EnvironmentFileReader>(),
                 sp.GetRequiredService<IPipelineOutputService>(),
-                sp.GetRequiredService<SSHConnectionFactory>(),
+                sp.GetRequiredService<ISSHConnectionFactory>(),
                 sp.GetRequiredService<DockerRegistryService>(),
                 sp.GetRequiredService<GitHubActionsGeneratorService>(),
                 sp.GetRequiredService<ISshKeyDiscoveryService>(),

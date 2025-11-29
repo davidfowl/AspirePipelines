@@ -118,6 +118,18 @@ internal class FakeFileSystem : IFileSystem
         return Path.GetFileName(path);
     }
 
+    public void CreateDirectory(string path)
+    {
+        _calls.Add(new FileSystemCall("CreateDirectory", path));
+        _directories.Add(NormalizePath(path));
+    }
+
+    public void DeleteFile(string path)
+    {
+        _calls.Add(new FileSystemCall("DeleteFile", path));
+        _files.Remove(NormalizePath(path));
+    }
+
     /// <summary>
     /// Clears all recorded calls.
     /// </summary>

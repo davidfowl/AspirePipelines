@@ -23,7 +23,7 @@ internal class DockerSSHPipeline(
     DockerCommandExecutor dockerCommandExecutor,
     EnvironmentFileReader environmentFileReader,
     IPipelineOutputService pipelineOutputService,
-    SSHConnectionFactory sshConnectionFactory,
+    ISSHConnectionFactory sshConnectionFactory,
     DockerRegistryService dockerRegistryService,
     GitHubActionsGeneratorService gitHubActionsGeneratorService,
     ISshKeyDiscoveryService sshKeyDiscoveryService,
@@ -33,7 +33,7 @@ internal class DockerSSHPipeline(
 {
     private readonly DockerCommandExecutor _dockerCommandExecutor = dockerCommandExecutor;
     private readonly EnvironmentFileReader _environmentFileReader = environmentFileReader;
-    private readonly SSHConnectionFactory _sshConnectionFactory = sshConnectionFactory;
+    private readonly ISSHConnectionFactory _sshConnectionFactory = sshConnectionFactory;
     private readonly DockerRegistryService _dockerRegistryService = dockerRegistryService;
     private readonly GitHubActionsGeneratorService _gitHubActionsGeneratorService = gitHubActionsGeneratorService;
     private readonly ISshKeyDiscoveryService _sshKeyDiscoveryService = sshKeyDiscoveryService;

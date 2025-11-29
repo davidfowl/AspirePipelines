@@ -28,4 +28,14 @@ internal class FileSystemAdapter : IFileSystem
     public string CombinePaths(params string[] paths) => Path.Combine(paths);
 
     public string GetFileName(string path) => Path.GetFileName(path);
+
+    public void CreateDirectory(string path) => Directory.CreateDirectory(path);
+
+    public void DeleteFile(string path)
+    {
+        if (File.Exists(path))
+        {
+            File.Delete(path);
+        }
+    }
 }

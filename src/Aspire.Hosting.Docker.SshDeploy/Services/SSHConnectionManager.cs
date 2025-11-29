@@ -27,8 +27,6 @@ internal class SSHConnectionManager : ISSHConnectionManager
 
     public string? TargetHost => _targetHost;
 
-    public SshClient? SshClient => _sshClient;
-
     public async Task EstablishConnectionAsync(
         SSHConnectionContext context,
         IReportingStep step,

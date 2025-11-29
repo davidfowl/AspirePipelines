@@ -264,12 +264,14 @@ internal class GitHubActionsGeneratorService
         // SSH setup depends on auth type
         if (options.SshAuthType is SshAuthType.Key or SshAuthType.KeyWithPassphrase)
         {
-            sb.AppendLine("      - name: Setup SSH key");
-            sb.AppendLine("        run: |");
-            sb.AppendLine("          mkdir -p ${{ github.workspace }}/.ssh");
-            sb.AppendLine("          echo \"${{ secrets.SSH_PRIVATE_KEY }}\" > ${{ github.workspace }}/.ssh/id_rsa");
-            sb.AppendLine("          chmod 600 ${{ github.workspace }}/.ssh/id_rsa");
-            sb.AppendLine("          ssh-keyscan -H ${{ vars.TARGET_HOST }} >> ${{ github.workspace }}/.ssh/known_hosts");
+            // Use ssh-agent action for key-based authentication
+            sb.AppendLine("      - name: Setup SSH agent");
+            sb.AppendLine("        uses: webfactory/ssh-agent@v0.9.0");
+            sb.AppendLine("        with:");
+            sb.AppendLine("          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}");
+            sb.AppendLine();
+            sb.AppendLine("      - name: Add known hosts");
+            sb.AppendLine("        run: ssh-keyscan -H ${{ vars.TARGET_HOST }} >> ~/.ssh/known_hosts");
             sb.AppendLine();
         }
         else
@@ -277,8 +279,8 @@ internal class GitHubActionsGeneratorService
             // Password auth - just need known_hosts
             sb.AppendLine("      - name: Setup SSH known hosts");
             sb.AppendLine("        run: |");
-            sb.AppendLine("          mkdir -p ${{ github.workspace }}/.ssh");
-            sb.AppendLine("          ssh-keyscan -H ${{ vars.TARGET_HOST }} >> ${{ github.workspace }}/.ssh/known_hosts");
+            sb.AppendLine("          mkdir -p ~/.ssh");
+            sb.AppendLine("          ssh-keyscan -H ${{ vars.TARGET_HOST }} >> ~/.ssh/known_hosts");
             sb.AppendLine();
         }
 
@@ -294,16 +296,11 @@ internal class GitHubActionsGeneratorService
         sb.AppendLine("          DockerSSH__SshUsername: ${{ secrets.SSH_USERNAME }}");
 
         // Auth-specific env vars
-        if (options.SshAuthType is SshAuthType.Key or SshAuthType.KeyWithPassphrase)
+        // For key-based auth: ssh-agent handles keys, no need for SshKeyPath
+        // For password auth: fall back to SSH.NET
+        if (options.SshAuthType == SshAuthType.Password)
         {
-            sb.AppendLine("          DockerSSH__SshKeyPath: ${{ github.workspace }}/.ssh/id_rsa");
-            if (options.SshAuthType == SshAuthType.KeyWithPassphrase)
-            {
-                sb.AppendLine("          DockerSSH__SshPassword: ${{ secrets.SSH_KEY_PASSPHRASE }}");
-            }
-        }
-        else
-        {
+            sb.AppendLine("          DockerSSH__UseLegacySshNet: 'true'");
             sb.AppendLine("          DockerSSH__SshPassword: ${{ secrets.SSH_PASSWORD }}");
         }
 

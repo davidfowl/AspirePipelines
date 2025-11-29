@@ -163,7 +163,7 @@ public class ConfigurationTests
         var fakeFileSystem = new FakeFileSystem();
 
         // Act
-        var result = SSHConnectionFactory.ResolveSSHKeyPath(null, fakeFileSystem);
+        var result = SSHNetConnectionFactory.ResolveSSHKeyPath(null, fakeFileSystem);
 
         // Assert
         Assert.Null(result);
@@ -176,7 +176,7 @@ public class ConfigurationTests
         var fakeFileSystem = new FakeFileSystem();
 
         // Act
-        var result = SSHConnectionFactory.ResolveSSHKeyPath("", fakeFileSystem);
+        var result = SSHNetConnectionFactory.ResolveSSHKeyPath("", fakeFileSystem);
 
         // Assert
         Assert.Null(result);
@@ -190,7 +190,7 @@ public class ConfigurationTests
         var keyPath = "/path/to/private/key";
 
         // Act
-        var result = SSHConnectionFactory.ResolveSSHKeyPath(keyPath, fakeFileSystem);
+        var result = SSHNetConnectionFactory.ResolveSSHKeyPath(keyPath, fakeFileSystem);
 
         // Assert
         Assert.Equal(keyPath, result);
@@ -204,7 +204,7 @@ public class ConfigurationTests
         var keyPath = @"C:\Users\test\.ssh\id_rsa";
 
         // Act
-        var result = SSHConnectionFactory.ResolveSSHKeyPath(keyPath, fakeFileSystem);
+        var result = SSHNetConnectionFactory.ResolveSSHKeyPath(keyPath, fakeFileSystem);
 
         // Assert
         Assert.Equal(keyPath, result);
@@ -223,7 +223,7 @@ public class ConfigurationTests
         fakeFileSystem.AddFile(expectedPath, "fake key content");
 
         // Act
-        var result = SSHConnectionFactory.ResolveSSHKeyPath(keyName, fakeFileSystem);
+        var result = SSHNetConnectionFactory.ResolveSSHKeyPath(keyName, fakeFileSystem);
 
         // Assert
         Assert.Equal(expectedPath, result);
@@ -237,7 +237,7 @@ public class ConfigurationTests
         var keyName = "id_rsa";
 
         // Act
-        var result = SSHConnectionFactory.ResolveSSHKeyPath(keyName, fakeFileSystem);
+        var result = SSHNetConnectionFactory.ResolveSSHKeyPath(keyName, fakeFileSystem);
 
         // Assert
         Assert.Equal(keyName, result);

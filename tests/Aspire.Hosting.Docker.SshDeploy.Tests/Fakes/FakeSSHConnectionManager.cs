@@ -3,7 +3,6 @@
 using Aspire.Hosting.Docker.SshDeploy.Abstractions;
 using Aspire.Hosting.Docker.SshDeploy.Models;
 using Aspire.Hosting.Pipelines;
-using Renci.SshNet;
 
 namespace Aspire.Hosting.Docker.SshDeploy.Tests.Fakes;
 
@@ -30,8 +29,6 @@ internal class FakeSSHConnectionManager : ISSHConnectionManager
     public bool IsConnected => _isConnected;
 
     public string? TargetHost => _targetHost;
-
-    public SshClient? SshClient => null; // Fake implementation doesn't provide real SSH client
 
     /// <summary>
     /// Configures the manager to throw an exception when establishing a connection.

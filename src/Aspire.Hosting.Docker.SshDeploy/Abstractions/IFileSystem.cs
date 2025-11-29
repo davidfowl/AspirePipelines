@@ -49,4 +49,14 @@ internal interface IFileSystem
     /// Gets the file name from a path.
     /// </summary>
     string GetFileName(string path);
+
+    /// <summary>
+    /// Creates all directories in the specified path if they don't exist.
+    /// </summary>
+    void CreateDirectory(string path);
+
+    /// <summary>
+    /// Deletes a file if it exists.
+    /// </summary>
+    void DeleteFile(string path);
 }

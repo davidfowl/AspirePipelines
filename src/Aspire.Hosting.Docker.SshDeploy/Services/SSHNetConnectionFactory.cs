@@ -13,19 +13,20 @@ using Microsoft.Extensions.Logging;
 namespace Aspire.Hosting.Docker.SshDeploy.Services;
 
 /// <summary>
-/// Factory for creating and establishing SSH connections for remote operations.
+/// Factory for creating and establishing SSH connections using SSH.NET library.
 /// Handles configuration discovery, user prompting, connection establishment, and state persistence.
+/// This is the legacy/fallback implementation - use NativeSSHConnectionFactory for ssh-agent support.
 /// </summary>
-internal class SSHConnectionFactory
+internal class SSHNetConnectionFactory : ISSHConnectionFactory
 {
     private readonly SSHConfigurationDiscovery _sshConfigurationDiscovery;
     private readonly IFileSystem _fileSystem;
-    private readonly ILogger<SSHConnectionFactory> _logger;
+    private readonly ILogger<SSHNetConnectionFactory> _logger;
     private readonly ILoggerFactory _loggerFactory;
     private readonly Func<ILogger<SSHConnectionManager>, ISSHConnectionManager> _connectionManagerFactory;
     private const string SshContextKey = "DockerSSH";
 
-    public SSHConnectionFactory(
+    public SSHNetConnectionFactory(
         SSHConfigurationDiscovery sshConfigurationDiscovery,
         IFileSystem fileSystem,
         ILoggerFactory loggerFactory,
@@ -34,7 +35,7 @@ internal class SSHConnectionFactory
         _sshConfigurationDiscovery = sshConfigurationDiscovery;
         _fileSystem = fileSystem;
         _loggerFactory = loggerFactory;
-        _logger = loggerFactory.CreateLogger<SSHConnectionFactory>();
+        _logger = loggerFactory.CreateLogger<SSHNetConnectionFactory>();
         _connectionManagerFactory = connectionManagerFactory ?? (logger => new SSHConnectionManager(logger));
     }
 

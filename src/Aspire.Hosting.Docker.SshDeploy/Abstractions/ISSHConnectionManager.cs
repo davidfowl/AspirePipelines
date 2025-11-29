@@ -2,12 +2,11 @@
 
 using Aspire.Hosting.Docker.SshDeploy.Models;
 using Aspire.Hosting.Pipelines;
-using Renci.SshNet;
 
 namespace Aspire.Hosting.Docker.SshDeploy.Abstractions;
 
 /// <summary>
-/// Manages SSH and SCP connections for remote operations.
+/// Manages SSH connections for remote operations.
 /// </summary>
 internal interface ISSHConnectionManager : IAsyncDisposable
 {
@@ -18,16 +17,9 @@ internal interface ISSHConnectionManager : IAsyncDisposable
 
     /// <summary>
     /// Gets the original target host that was configured for the connection.
-    /// This preserves the domain name even after SSH.NET resolves it to an IP address.
     /// Returns null if not connected.
     /// </summary>
     string? TargetHost { get; }
-
-    /// <summary>
-    /// Gets the underlying SSH client for advanced operations (e.g., utilities that need direct access).
-    /// Returns null if not connected.
-    /// </summary>
-    SshClient? SshClient { get; }
 
     /// <summary>
     /// Establishes and tests an SSH connection using the provided context.
@@ -58,7 +50,7 @@ internal interface ISSHConnectionManager : IAsyncDisposable
         CancellationToken cancellationToken);
 
     /// <summary>
-    /// Disconnects and cleans up the SSH and SCP connections.
+    /// Disconnects and cleans up the SSH connections.
     /// </summary>
     Task DisconnectAsync();
 }
