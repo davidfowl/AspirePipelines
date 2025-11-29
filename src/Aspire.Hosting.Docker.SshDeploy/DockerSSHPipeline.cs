@@ -564,7 +564,7 @@ internal class DockerSSHPipeline(
 
         if (!ServiceUrlFormatter.CanShowTargetHost(_configuration, targetHost))
         {
-            context.Logger.LogWarning("Target host is an IP address and will be masked. Set UNSAFE_SHOW_TARGET_HOST=true to show the IP address, or use a domain name instead.");
+            context.Logger.LogWarning("Target host is masked for security. Set UNSAFE_SHOW_TARGET_HOST=true to show it.");
             serviceUrlsForTable = ServiceUrlFormatter.MaskUrlHosts(serviceUrlsForTable, customDomain: null);
         }
 

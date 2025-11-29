@@ -6,37 +6,21 @@ internal static class ServiceUrlFormatter
 {
     /// <summary>
     /// Determines if the target host can be shown in output.
-    /// - If host is a domain name (not an IP address) → show it
-    /// - If host is an IP address → mask it by default
-    /// - If UNSAFE_SHOW_TARGET_HOST=true/1 → always show, even IPs
+    /// Target host is always treated as sensitive and masked by default.
+    /// Set UNSAFE_SHOW_TARGET_HOST=true/1 to show the host.
     /// </summary>
     public static bool CanShowTargetHost(IConfiguration configuration, string? host)
     {
-        // If UNSAFE_SHOW_TARGET_HOST is explicitly set to true/1, always show
-        var unsafeShowHost = configuration["UNSAFE_SHOW_TARGET_HOST"];
-        if (string.Equals(unsafeShowHost, "true", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(unsafeShowHost, "1", StringComparison.Ordinal))
-        {
-            return true;
-        }
-
         // If host is empty/null, can't show it anyway
         if (string.IsNullOrEmpty(host))
         {
             return false;
         }
 
-        // If host looks like an IP address, mask it
-        // Otherwise it's a domain name, show it
-        return !IsIpAddress(host);
-    }
-
-    /// <summary>
-    /// Checks if a string looks like an IP address (IPv4 or IPv6).
-    /// </summary>
-    public static bool IsIpAddress(string host)
-    {
-        return System.Net.IPAddress.TryParse(host, out _);
+        // Target host is always masked unless UNSAFE_SHOW_TARGET_HOST is set
+        var unsafeShowHost = configuration["UNSAFE_SHOW_TARGET_HOST"];
+        return string.Equals(unsafeShowHost, "true", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(unsafeShowHost, "1", StringComparison.Ordinal);
     }
 
     public static string FormatServiceUrlsAsTable(Dictionary<string, List<string>> serviceUrls)

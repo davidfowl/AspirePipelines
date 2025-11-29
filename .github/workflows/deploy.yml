@@ -47,7 +47,7 @@ jobs:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
       - name: Add known hosts
-        run: ssh-keyscan -H ${{ vars.TARGET_HOST }} >> ~/.ssh/known_hosts
+        run: ssh-keyscan -H ${{ secrets.TARGET_HOST }} >> ~/.ssh/known_hosts
 
       - name: Set short SHA
         run: echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
@@ -55,7 +55,7 @@ jobs:
       - name: Deploy
         run: aspire deploy
         env:
-          DockerSSH__TargetHost: ${{ vars.TARGET_HOST }}
+          DockerSSH__TargetHost: ${{ secrets.TARGET_HOST }}
           DockerSSH__SshUsername: ${{ secrets.VPS_USERNAME }}
           DockerRegistry__RegistryUrl: ghcr.io
           DockerRegistry__RepositoryPrefix: ${{ github.repository }}

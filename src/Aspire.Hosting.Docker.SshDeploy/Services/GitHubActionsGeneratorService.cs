@@ -271,7 +271,7 @@ internal class GitHubActionsGeneratorService
             sb.AppendLine("          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}");
             sb.AppendLine();
             sb.AppendLine("      - name: Add known hosts");
-            sb.AppendLine("        run: ssh-keyscan -H ${{ vars.TARGET_HOST }} >> ~/.ssh/known_hosts");
+            sb.AppendLine("        run: ssh-keyscan -H ${{ secrets.TARGET_HOST }} >> ~/.ssh/known_hosts");
             sb.AppendLine();
         }
         else
@@ -280,7 +280,7 @@ internal class GitHubActionsGeneratorService
             sb.AppendLine("      - name: Setup SSH known hosts");
             sb.AppendLine("        run: |");
             sb.AppendLine("          mkdir -p ~/.ssh");
-            sb.AppendLine("          ssh-keyscan -H ${{ vars.TARGET_HOST }} >> ~/.ssh/known_hosts");
+            sb.AppendLine("          ssh-keyscan -H ${{ secrets.TARGET_HOST }} >> ~/.ssh/known_hosts");
             sb.AppendLine();
         }
 
@@ -292,7 +292,7 @@ internal class GitHubActionsGeneratorService
 
         // Build environment variables section
         sb.AppendLine("        env:");
-        sb.AppendLine("          DockerSSH__TargetHost: ${{ vars.TARGET_HOST }}");
+        sb.AppendLine("          DockerSSH__TargetHost: ${{ secrets.TARGET_HOST }}");
         sb.AppendLine("          DockerSSH__SshUsername: ${{ secrets.SSH_USERNAME }}");
 
         // Auth-specific env vars

@@ -141,9 +141,9 @@ export DockerRegistry__RegistryUrl=ghcr.io
 
 ### Target Host Privacy
 
-IP addresses are masked in output by default. Domain names are shown.
+The target host is treated as sensitive and masked in output by default.
 
-To show IP addresses:
+To show the target host:
 ```bash
 export UNSAFE_SHOW_TARGET_HOST=true
 ```

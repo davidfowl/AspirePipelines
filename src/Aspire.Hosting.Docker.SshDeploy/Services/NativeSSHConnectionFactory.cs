@@ -153,8 +153,8 @@ internal class NativeSSHConnectionFactory : ISSHConnectionFactory
         IConfiguration configuration,
         CancellationToken cancellationToken)
     {
-        // For prompts, we use SecretText by default since we don't know yet if it's an IP or domain
-        // Only show as plain text if UNSAFE_SHOW_TARGET_HOST=true/1 is explicitly set
+        // Target host is always treated as a secret
+        // Set UNSAFE_SHOW_TARGET_HOST=true/1 to show it as plain text
         var unsafeShowHost = configuration["UNSAFE_SHOW_TARGET_HOST"];
         var forceShow = string.Equals(unsafeShowHost, "true", StringComparison.OrdinalIgnoreCase) ||
                         string.Equals(unsafeShowHost, "1", StringComparison.Ordinal);
