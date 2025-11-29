@@ -27,6 +27,7 @@ internal class DockerSSHPipeline(
     DockerRegistryService dockerRegistryService,
     GitHubActionsGeneratorService gitHubActionsGeneratorService,
     ISshKeyDiscoveryService sshKeyDiscoveryService,
+    IProcessExecutor processExecutor,
     IConfiguration configuration,
     IHostEnvironment hostEnvironment,
     ILoggerFactory loggerFactory) : IAsyncDisposable
@@ -37,6 +38,7 @@ internal class DockerSSHPipeline(
     private readonly DockerRegistryService _dockerRegistryService = dockerRegistryService;
     private readonly GitHubActionsGeneratorService _gitHubActionsGeneratorService = gitHubActionsGeneratorService;
     private readonly ISshKeyDiscoveryService _sshKeyDiscoveryService = sshKeyDiscoveryService;
+    private readonly IProcessExecutor _processExecutor = processExecutor;
     private readonly IConfiguration _configuration = configuration;
     private readonly IHostEnvironment _hostEnvironment = hostEnvironment;
     private readonly ILoggerFactory _loggerFactory = loggerFactory;
@@ -183,6 +185,7 @@ internal class DockerSSHPipeline(
         // Create remote operations factory with the connected manager
         _remoteOperationsFactory = new RemoteOperationsFactory(
             _sshConnectionManager,
+            _processExecutor,
             _environmentFileReader,
             _loggerFactory);
 
@@ -1107,6 +1110,9 @@ internal class DockerSSHPipeline(
     {
         var step = context.ReportingStep;
 
+        // Log local environment info for diagnostics
+        await LogLocalEnvironmentAsync(step, context.CancellationToken);
+
         // Create all prerequisite check tasks
         var dockerTask = _dockerCommandExecutor.CheckDockerAvailability(step, context.CancellationToken);
         var dockerComposeTask = _dockerCommandExecutor.CheckDockerCompose(step, context.CancellationToken);
@@ -1114,6 +1120,23 @@ internal class DockerSSHPipeline(
         // Run all prerequisite checks concurrently
         await Task.WhenAll(dockerTask, dockerComposeTask);
         await step.SucceedAsync("All prerequisites verified successfully");
+    }
+
+    private async Task LogLocalEnvironmentAsync(IReportingStep step, CancellationToken cancellationToken)
+    {
+        await using var task = await step.CreateTaskAsync("Checking local environment", cancellationToken);
+
+        // Local OS
+        var localOs = System.Runtime.InteropServices.RuntimeInformation.OSDescription;
+        _logger.LogInformation("Local OS: {LocalOs}", localOs);
+
+        // Local SSH version
+        var sshResult = await _processExecutor.ExecuteAsync("ssh", "-V", cancellationToken: cancellationToken);
+        // ssh -V writes to stderr
+        var localSsh = !string.IsNullOrEmpty(sshResult.Error) ? sshResult.Error.Trim() : sshResult.Output.Trim();
+        _logger.LogInformation("Local SSH: {LocalSsh}", localSsh);
+
+        await task.SucceedAsync($"Local: {localOs}, SSH: {localSsh}", cancellationToken);
     }
 
     public async ValueTask DisposeAsync()

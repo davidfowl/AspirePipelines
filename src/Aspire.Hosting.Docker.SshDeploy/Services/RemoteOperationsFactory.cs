@@ -10,6 +10,7 @@ namespace Aspire.Hosting.Docker.SshDeploy.Services;
 internal class RemoteOperationsFactory
 {
     private readonly ISSHConnectionManager _sshConnectionManager;
+    private readonly IProcessExecutor _processExecutor;
     private readonly EnvironmentFileReader _environmentFileReader;
     private readonly ILoggerFactory _loggerFactory;
 
@@ -22,10 +23,12 @@ internal class RemoteOperationsFactory
 
     public RemoteOperationsFactory(
         ISSHConnectionManager sshConnectionManager,
+        IProcessExecutor processExecutor,
         EnvironmentFileReader environmentFileReader,
         ILoggerFactory loggerFactory)
     {
         _sshConnectionManager = sshConnectionManager;
+        _processExecutor = processExecutor;
         _environmentFileReader = environmentFileReader;
         _loggerFactory = loggerFactory;
     }
@@ -39,7 +42,7 @@ internal class RemoteOperationsFactory
         _fileService ??= new RemoteFileService(_sshConnectionManager, _loggerFactory.CreateLogger<RemoteFileService>());
 
     public IRemoteDockerEnvironmentService DockerEnvironmentService =>
-        _dockerEnvironmentService ??= new RemoteDockerEnvironmentService(_sshConnectionManager, _loggerFactory.CreateLogger<RemoteDockerEnvironmentService>());
+        _dockerEnvironmentService ??= new RemoteDockerEnvironmentService(_sshConnectionManager, _processExecutor, _loggerFactory.CreateLogger<RemoteDockerEnvironmentService>());
 
     public IRemoteDockerComposeService DockerComposeService =>
         _dockerComposeService ??= new RemoteDockerComposeService(_sshConnectionManager, _loggerFactory.CreateLogger<RemoteDockerComposeService>());

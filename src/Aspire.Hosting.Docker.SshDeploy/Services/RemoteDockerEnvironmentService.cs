@@ -9,19 +9,36 @@ namespace Aspire.Hosting.Docker.SshDeploy.Services;
 internal class RemoteDockerEnvironmentService : IRemoteDockerEnvironmentService
 {
     private readonly ISSHConnectionManager _sshConnectionManager;
+    private readonly IProcessExecutor _processExecutor;
     private readonly ILogger<RemoteDockerEnvironmentService> _logger;
 
     public RemoteDockerEnvironmentService(
         ISSHConnectionManager sshConnectionManager,
+        IProcessExecutor processExecutor,
         ILogger<RemoteDockerEnvironmentService> logger)
     {
         _sshConnectionManager = sshConnectionManager;
+        _processExecutor = processExecutor;
         _logger = logger;
     }
 
     public async Task<DockerEnvironmentInfo> ValidateDockerEnvironmentAsync(CancellationToken cancellationToken)
     {
         _logger.LogDebug("Validating Docker environment on remote server");
+
+        // Get OS version for diagnostics
+        var osVersionCheck = await _sshConnectionManager.ExecuteCommandWithOutputAsync(
+            "cat /etc/os-release 2>/dev/null | grep -E '^(NAME|VERSION)=' | head -2 || uname -a",
+            cancellationToken);
+        var osVersion = osVersionCheck.ExitCode == 0 ? osVersionCheck.Output.Trim() : "Unknown";
+        _logger.LogInformation("Remote OS: {OsVersion}", osVersion.Replace("\n", " "));
+
+        // Get SSH server version for diagnostics
+        var sshVersionCheck = await _sshConnectionManager.ExecuteCommandWithOutputAsync(
+            "ssh -V 2>&1 || echo 'Unknown'",
+            cancellationToken);
+        var sshVersion = sshVersionCheck.Output.Trim();
+        _logger.LogInformation("Remote SSH: {SshVersion}", sshVersion);
 
         // Check Docker installation
         var dockerVersionCheck = await _sshConnectionManager.ExecuteCommandWithOutputAsync(
@@ -35,7 +52,7 @@ internal class RemoteDockerEnvironmentService : IRemoteDockerEnvironmentService
         }
 
         var dockerVersion = dockerVersionCheck.Output.Trim();
-        _logger.LogDebug("Docker version: {DockerVersion}", dockerVersion);
+        _logger.LogInformation("Remote Docker: {DockerVersion}", dockerVersion);
 
         // Check Docker daemon is running
         var dockerInfoCheck = await _sshConnectionManager.ExecuteCommandWithOutputAsync(

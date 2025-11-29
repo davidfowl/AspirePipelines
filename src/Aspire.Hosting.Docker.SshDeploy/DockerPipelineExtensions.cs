@@ -105,6 +105,7 @@ public static class DockerPipelineExtensions
                 sp.GetRequiredService<DockerRegistryService>(),
                 sp.GetRequiredService<GitHubActionsGeneratorService>(),
                 sp.GetRequiredService<ISshKeyDiscoveryService>(),
+                sp.GetRequiredService<IProcessExecutor>(),
                 sp.GetRequiredService<IConfiguration>(),
                 sp.GetRequiredService<IHostEnvironment>(),
                 sp.GetRequiredService<ILoggerFactory>()));
