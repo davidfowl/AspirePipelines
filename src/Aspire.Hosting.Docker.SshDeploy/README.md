@@ -223,6 +223,34 @@ env:
   DockerRegistry__RepositoryPrefix: ${{ github.repository_owner }}
 ```
 
+## Teardown
+
+Tear down a deployed environment by stopping and removing all containers:
+
+```bash
+aspire do teardown-{resource-name}
+```
+
+For example, if your Docker Compose environment is named `env`:
+
+```bash
+aspire do teardown-env
+```
+
+This command:
+1. Connects to the remote server via SSH
+2. Shows all running containers and their status
+3. Prompts for confirmation before proceeding
+4. Runs `docker compose down` to stop and remove containers
+
+This is great for ephemeral environments like feature branch deployments, PR previews, or temporary staging environments that need to be cleaned up after use.
+
+### Configuration
+
+The teardown command uses the same SSH and deployment configuration as `aspire deploy`. It will prompt for credentials if not already configured.
+
+To skip prompts, ensure your `appsettings.json` or environment variables are set (see [Configuration](#configuration-optional)).
+
 ## Links
 
 - [GitHub Repository](https://github.com/davidfowl/AspirePipelines)
