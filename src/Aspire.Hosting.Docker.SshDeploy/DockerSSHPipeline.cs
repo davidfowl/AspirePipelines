@@ -125,7 +125,13 @@ internal class DockerSSHPipeline(
         // This step has no dependencies and is not part of the normal deploy flow
         var generateGitHubWorkflow = new PipelineStep { Name = $"gh-action-{DockerComposeEnvironment.Name}", Action = GenerateGitHubActionsWorkflowStep };
 
-        return [prereqs, establishSsh, configureRegistry, configureDeployment, prepareRemote, pushImages, mergeEnv, transferFiles, transferExtraFiles, deploy, extractDashboardToken, cleanup, deploySshStep, generateGitHubWorkflow];
+        // Orphan step for tearing down the environment (invoked via `aspire do teardown-{name}`)
+        // Depends on SSH connection and deployment configuration
+        var teardown = new PipelineStep { Name = $"teardown-{DockerComposeEnvironment.Name}", Action = TeardownEnvironmentStep };
+        teardown.DependsOn(establishSsh);
+        teardown.DependsOn(configureDeployment);
+
+        return [prereqs, establishSsh, configureRegistry, configureDeployment, prepareRemote, pushImages, mergeEnv, transferFiles, transferExtraFiles, deploy, extractDashboardToken, cleanup, deploySshStep, generateGitHubWorkflow, teardown];
     }
 
     public Task ConfigurePipelineAsync(PipelineConfigurationContext context)
@@ -569,6 +575,92 @@ internal class DockerSSHPipeline(
         await step.SucceedAsync($"Application deployed successfully! Services running: {status.HealthyServices} of {status.TotalServices} containers healthy.");
     }
     #endregion
+
+    private async Task TeardownEnvironmentStep(PipelineStepContext context)
+    {
+        var step = context.ReportingStep;
+        var interactionService = context.Services.GetRequiredService<IInteractionService>();
+
+        // Get target host for display
+        var targetHost = _sshConnectionManager?.TargetHost ?? "unknown";
+
+        // Get current deployment status
+        await using var statusTask = await step.CreateTaskAsync("Checking deployment status", context.CancellationToken);
+        var status = await RemoteOperationsFactory.DockerComposeService.GetStatusAsync(RemoteDeployPath, targetHost, context.CancellationToken);
+
+        if (status.TotalServices == 0)
+        {
+            await statusTask.SucceedAsync("No containers found", context.CancellationToken);
+            await step.SucceedAsync($"No deployment found at {RemoteDeployPath} on {targetHost}");
+
+            // Cleanup SSH connection
+            if (_sshConnectionManager != null)
+            {
+                await _sshConnectionManager.DisconnectAsync();
+            }
+            return;
+        }
+
+        await statusTask.SucceedAsync($"Found {status.TotalServices} container(s)", context.CancellationToken);
+
+        // Build service list for display
+        var serviceList = status.Services
+            .Select(s => $"  - {s.Service}: {s.State} ({s.Status})")
+            .ToList();
+
+        var message = $"The following containers are running at {RemoteDeployPath} on {targetHost}:\n\n{string.Join("\n", serviceList)}\n\nThis will stop and remove all containers. Are you sure you want to proceed?";
+
+        // Confirm with user
+        var confirmResult = await interactionService.PromptNotificationAsync(
+            "Confirm Teardown",
+            message,
+            new NotificationInteractionOptions
+            {
+                Intent = MessageIntent.Confirmation,
+                ShowSecondaryButton = true,
+                ShowDismiss = false,
+                PrimaryButtonText = "Yes, tear down",
+                SecondaryButtonText = "Cancel"
+            },
+            context.CancellationToken);
+
+        if (confirmResult.Canceled || !confirmResult.Data)
+        {
+            // Cleanup SSH connection
+            if (_sshConnectionManager != null)
+            {
+                await _sshConnectionManager.DisconnectAsync();
+            }
+
+            throw new OperationCanceledException("Teardown canceled by user");
+        }
+
+        // Stop and remove all containers
+        await using var stopTask = await step.CreateTaskAsync("Stopping and removing containers", context.CancellationToken);
+        var stopResult = await RemoteOperationsFactory.DockerComposeService.StopAsync(RemoteDeployPath, context.CancellationToken);
+
+        if (!stopResult.Success)
+        {
+            throw new InvalidOperationException($"Failed to stop containers: {stopResult.Error}");
+        }
+
+        if (!string.IsNullOrEmpty(stopResult.Output))
+        {
+            await stopTask.SucceedAsync($"Containers stopped\n{stopResult.Output.Trim()}", context.CancellationToken);
+        }
+        else
+        {
+            await stopTask.SucceedAsync("Containers stopped", context.CancellationToken);
+        }
+
+        // Cleanup SSH connection
+        if (_sshConnectionManager != null)
+        {
+            await _sshConnectionManager.DisconnectAsync();
+        }
+
+        await step.SucceedAsync($"Environment '{DockerComposeEnvironment.Name}' torn down successfully");
+    }
 
     private async Task ExtractDashboardLoginTokenStep(PipelineStepContext context)
     {
