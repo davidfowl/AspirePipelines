@@ -35,6 +35,10 @@ internal class SSHConnectionContext
     public string? SshPassword { get; set; }
     public string? SshKeyPath { get; set; }
     public required string SshPort { get; set; }
+    /// <summary>
+    /// SSH connection timeout in seconds. Default is 120 seconds (2 minutes).
+    /// </summary>
+    public int ConnectTimeout { get; set; } = 120;
 }
 
 /// <summary>

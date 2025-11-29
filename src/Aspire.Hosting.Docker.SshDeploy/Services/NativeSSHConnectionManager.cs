@@ -22,6 +22,7 @@ internal class NativeSSHConnectionManager : ISSHConnectionManager
     private string? _username;
     private string? _port;
     private string? _controlSocketPath;
+    private int _connectTimeout;
     private bool _isConnected;
 
     public NativeSSHConnectionManager(
@@ -45,6 +46,7 @@ internal class NativeSSHConnectionManager : ISSHConnectionManager
         _targetHost = context.TargetHost;
         _username = context.SshUsername;
         _port = context.SshPort;
+        _connectTimeout = context.ConnectTimeout;
 
         // Generate unique control socket path in ~/.aspire/temp
         // Unix sockets have max path length of ~104 chars on macOS, so keep it short
@@ -210,7 +212,7 @@ internal class NativeSSHConnectionManager : ISSHConnectionManager
         args.Append("-o ControlPersist=600 ");                  // Keep master alive for 10 minutes
         args.Append("-o BatchMode=yes ");                       // No interactive prompts (fail if auth fails)
         args.Append("-o StrictHostKeyChecking=accept-new ");    // Auto-accept new host keys
-        args.Append("-o ConnectTimeout=30 ");                   // Connection timeout
+        args.Append($"-o ConnectTimeout={_connectTimeout} ");    // Connection timeout
         args.Append($"-p {_port} ");                            // Port
         args.Append($"{_username}@{_targetHost} ");             // User@host
         args.Append($"\"{EscapeShellCommand(command)}\"");      // Command to execute

@@ -79,12 +79,14 @@ internal class NativeSSHConnectionFactory : ISSHConnectionFactory
         var targetHost = section[nameof(SSHConnectionContext.TargetHost)];
         var sshUsername = section[nameof(SSHConnectionContext.SshUsername)];
         var sshPort = section[nameof(SSHConnectionContext.SshPort)];
+        var connectTimeoutStr = section[nameof(SSHConnectionContext.ConnectTimeout)];
+        var connectTimeout = int.TryParse(connectTimeoutStr, out var timeout) ? timeout : 120;
 
         // If we have host and username, we're good - ssh-agent handles auth
         if (!string.IsNullOrEmpty(targetHost) && !string.IsNullOrEmpty(sshUsername))
         {
-            _logger.LogDebug("Using SSH configuration from settings: {User}@{Host}:{Port}",
-                sshUsername, targetHost, sshPort ?? "22");
+            _logger.LogDebug("Using SSH configuration from settings: {User}@{Host}:{Port} (timeout: {Timeout}s)",
+                sshUsername, targetHost, sshPort ?? "22", connectTimeout);
 
             return new SSHConnectionContext
             {
@@ -92,7 +94,8 @@ internal class NativeSSHConnectionFactory : ISSHConnectionFactory
                 SshUsername = sshUsername,
                 SshPassword = null,  // Not needed - using ssh-agent
                 SshKeyPath = null,   // Not needed - using ssh-agent
-                SshPort = string.IsNullOrEmpty(sshPort) ? "22" : sshPort
+                SshPort = string.IsNullOrEmpty(sshPort) ? "22" : sshPort,
+                ConnectTimeout = connectTimeout
             };
         }
 
@@ -119,7 +122,8 @@ internal class NativeSSHConnectionFactory : ISSHConnectionFactory
                 SshUsername = sshUsername!,
                 SshPassword = null,
                 SshKeyPath = null,
-                SshPort = sshPort ?? "22"
+                SshPort = sshPort ?? "22",
+                ConnectTimeout = connectTimeout
             };
         }
 
@@ -139,7 +143,8 @@ internal class NativeSSHConnectionFactory : ISSHConnectionFactory
             SshUsername = username,
             SshPassword = null,
             SshKeyPath = null,
-            SshPort = port
+            SshPort = port,
+            ConnectTimeout = connectTimeout
         };
     }
 
