@@ -72,6 +72,13 @@ internal class DockerRegistryService
         if (registryConfig != null)
         {
             _logger.LogInformation("Using registry configuration from settings");
+
+            // Authenticate if credentials provided
+            if (!string.IsNullOrEmpty(registryConfig.RegistryUsername) && !string.IsNullOrEmpty(registryConfig.RegistryPassword))
+            {
+                await AuthenticateWithRegistryAsync(registryConfig, step, cancellationToken);
+            }
+
             return registryConfig;
         }
 
