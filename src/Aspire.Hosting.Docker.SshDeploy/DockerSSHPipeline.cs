@@ -1060,11 +1060,10 @@ internal class DockerSSHPipeline(
         // Create the environment first (idempotent)
         await _gitHubActionsGeneratorService.CreateEnvironmentAsync(environmentName, ct);
 
-        // Set only the values that were collected
+        // Set only the values that were collected (all infrastructure values are secrets)
         foreach (var (name, value) in collectedValues)
         {
-            var isSecret = name != "TARGET_HOST";
-            await _gitHubActionsGeneratorService.SetEnvironmentValueAsync(environmentName, name, value, isSecret, ct);
+            await _gitHubActionsGeneratorService.SetEnvironmentValueAsync(environmentName, name, value, isSecret: true, ct);
         }
 
         // Set parameter values in GitHub (only for parameters that don't already exist)
