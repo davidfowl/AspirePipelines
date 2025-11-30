@@ -760,7 +760,10 @@ internal class DockerSSHPipeline(
         await queryTask.SucceedAsync($"Found {existingSecrets.Count} secrets, {existingVariables.Count} variables", ct);
 
         // Build parameter infos from the model (without resolving values yet)
-        var parameters = context.Model.Resources.OfType<ParameterResource>().ToList();
+        // Use ParameterCollector to find all referenced parameters, including those in env vars and args
+        var executionContext = context.Services.GetRequiredService<DistributedApplicationExecutionContext>();
+        var parameters = await ParameterCollector.CollectAllReferencedParametersAsync(
+            context.Model, executionContext, _logger, ct);
         var parameterInfos = parameters.Select(p =>
         {
             var info = new ParameterInfo(p, null, ExistsInGitHub: false);
