@@ -1,9 +1,42 @@
 #pragma warning disable ASPIRECOMPUTE001 // WithDeploymentImageTag is experimental
 
-// Sample demonstrating SSH deployment to a remote Docker host with:
-// - Custom image tagging from CI/CD
-// - Let's Encrypt certificate generation via certbot
-// - YARP reverse proxy with HTTPS
+// =============================================================================
+// Sample: SSH Deployment to Remote Docker Host
+// =============================================================================
+//
+// This sample demonstrates deploying an Aspire application to a remote Docker
+// host via SSH with the following features:
+//
+// - Custom image tagging from CI/CD pipelines
+// - YARP reverse proxy as the public entry point
+// - Optional HTTPS with automatic Let's Encrypt certificate generation
+//
+// Configuration (appsettings.json or environment variables):
+// ----------------------------------------------------------
+// - EnableHttps: Set to "true" to enable HTTPS with Let's Encrypt certificates.
+//                When false (default), only HTTP on port 80 is exposed.
+//
+// Required parameters when EnableHttps=true:
+// - Parameters__domain: The domain name for the certificate (e.g., "example.com")
+// - Parameters__letsencrypt_email: Email for Let's Encrypt registration/notifications
+//
+// How HTTPS works:
+// ----------------
+// When EnableHttps is true, a certbot container is added that:
+// 1. Runs the Let's Encrypt ACME HTTP-01 challenge on port 80
+// 2. Obtains/renews certificates and stores them in a shared Docker volume
+// 3. Sets permissions so non-root containers can read the certificates
+// 4. Exits after certificate generation
+//
+// YARP then starts (after certbot completes) and:
+// - Mounts the shared certificate volume (read-only)
+// - Serves HTTPS on port 443 using the Let's Encrypt certificates
+// - Serves HTTP on port 80
+//
+// On subsequent deployments, certbot skips certificate generation if valid
+// certificates already exist (--keep-until-expiring flag).
+//
+// =============================================================================
 
 var builder = DistributedApplication.CreateBuilder(args);
 
@@ -51,15 +84,30 @@ if (builder.ExecutionContext.IsPublishMode)
 
     if (enableHttps)
     {
-        // Let's Encrypt parameters
+        // Let's Encrypt parameters (required when EnableHttps=true)
+        // Set via: Parameters__domain and Parameters__letsencrypt_email
         var domain = builder.AddParameter("domain");
         var letsEncryptEmail = builder.AddParameter("letsencrypt-email");
 
-        // Certbot container for Let's Encrypt certificates
+        // Certbot container for automatic Let's Encrypt certificate generation
+        // Uses the official certbot/certbot image to obtain and renew certificates.
+        //
+        // Certbot arguments explained:
+        // - certonly: Only obtain the certificate, don't install it
+        // - --standalone: Run a temporary webserver for the ACME HTTP-01 challenge
+        // - --non-interactive: Don't prompt for user input
+        // - --agree-tos: Agree to Let's Encrypt Terms of Service
+        // - --keep-until-expiring: Skip if cert exists and is not within 30 days of expiry
+        // - --deploy-hook: Command to run after successful cert issuance (fix permissions)
+        // - --email: Email for urgent renewal/security notices
+        // - -d: Domain name for the certificate
+        //
         var certbot = builder.AddContainer("certbot", "certbot/certbot")
+            // Shared volume for certificates - both certbot and YARP mount this
             .WithVolume("letsencrypt", "/etc/letsencrypt")
-            .WithHttpEndpoint(port: 80, targetPort: 80) // Required for standalone HTTP-01 challenge
-            .WithExternalHttpEndpoints() // Publish port 80 to host for ACME challenge
+            // Port 80 must be published to host for Let's Encrypt to reach the ACME challenge
+            .WithHttpEndpoint(port: 80, targetPort: 80)
+            .WithExternalHttpEndpoints()
             .WithArgs(context =>
             {
                 context.Args.Add("certonly");
@@ -67,7 +115,8 @@ if (builder.ExecutionContext.IsPublishMode)
                 context.Args.Add("--non-interactive");
                 context.Args.Add("--agree-tos");
                 context.Args.Add("-v");
-                context.Args.Add("--keep-until-expiring"); // Skip if valid cert exists and not near expiry
+                context.Args.Add("--keep-until-expiring");
+                // Fix permissions so non-root containers (like YARP) can read the certs
                 context.Args.Add("--deploy-hook");
                 context.Args.Add("chmod -R 755 /etc/letsencrypt/live && chmod -R 755 /etc/letsencrypt/archive");
                 context.Args.Add("--email");
@@ -76,20 +125,22 @@ if (builder.ExecutionContext.IsPublishMode)
                 context.Args.Add(domain.Resource);
             });
 
-        // YARP needs port 80 after certbot completes, so certbot binds 80 during challenge
-        // This requires certbot to run first and exit before YARP starts
+        // Certbot and YARP both need port 80, but at different times:
+        // - Certbot needs port 80 during the ACME challenge (runs first, then exits)
+        // - YARP needs port 80 for HTTP traffic (starts after certbot completes)
+        // WaitForCompletion ensures YARP doesn't start until certbot exits successfully
         yarp.WaitForCompletion(certbot);
 
         yarp.WithHostPort(80);
         yarp.WithHttpsEndpoint(443);
 
-        // Mount the shared letsencrypt volume (read-only for YARP)
+        // Mount the shared certificate volume (read-only since YARP only reads certs)
         yarp.WithVolume("letsencrypt", "/etc/letsencrypt", isReadOnly: true);
 
-        // Configure Kestrel to use Let's Encrypt certificates
+        // Configure Kestrel to use the Let's Encrypt certificates
+        // Certbot stores certs at: /etc/letsencrypt/live/{domain}/
         yarp.WithEnvironment(context =>
         {
-            // Certificate paths - domain is interpolated
             context.EnvironmentVariables["Kestrel__Certificates__Default__Path"] =
                 ReferenceExpression.Create($"/etc/letsencrypt/live/{domain}/fullchain.pem");
             context.EnvironmentVariables["Kestrel__Certificates__Default__KeyPath"] =
