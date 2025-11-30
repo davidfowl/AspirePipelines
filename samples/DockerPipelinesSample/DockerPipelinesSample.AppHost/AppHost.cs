@@ -2,7 +2,7 @@
 
 // Sample demonstrating SSH deployment to a remote Docker host with:
 // - Custom image tagging from CI/CD
-// - Optional TLS certificate transfer
+// - Let's Encrypt certificate generation via certbot
 // - YARP reverse proxy with HTTPS
 
 var builder = DistributedApplication.CreateBuilder(args);
@@ -13,8 +13,7 @@ var imageTag = builder.Configuration["IMAGE_TAG_SUFFIX"];
 // Configure Docker Compose environment with SSH deployment support
 builder.AddDockerComposeEnvironment("env")
     .WithDashboard(db => db.WithHostPort(8085))
-    .WithSshDeploySupport()
-    .WithAppFileTransfer("certs", "certs"); // Skipped if certs folder doesn't exist
+    .WithSshDeploySupport();
 
 var p = builder.AddParameter("p");
 
@@ -48,20 +47,55 @@ if (!string.IsNullOrEmpty(imageTag))
 
 if (builder.ExecutionContext.IsPublishMode)
 {
-    yarp.WithHostPort(80);
+    var enableHttps = bool.TryParse(builder.Configuration["EnableHttps"], out var v) && v;
 
-    // Configure HTTPS if TLS certificates exist
-    var certPath = Path.Combine(builder.AppHostDirectory, "certs");
-
-    if (Directory.Exists(certPath))
+    if (enableHttps)
     {
+        // Let's Encrypt parameters
+        var domain = builder.AddParameter("domain");
+        var letsEncryptEmail = builder.AddParameter("letsencrypt-email");
+
+        // Certbot container for Let's Encrypt certificates
+        var certbot = builder.AddContainer("certbot", "certbot/certbot")
+            .WithVolume("letsencrypt", "/etc/letsencrypt")
+            .WithHttpEndpoint(port: 80, targetPort: 80) // Required for standalone HTTP-01 challenge
+            .WithExternalHttpEndpoints() // Publish port 80 to host for ACME challenge
+            .WithArgs(context =>
+            {
+                context.Args.Add("certonly");
+                context.Args.Add("--standalone");
+                context.Args.Add("--non-interactive");
+                context.Args.Add("--agree-tos");
+                context.Args.Add("-v");
+                context.Args.Add("--keep-until-expiring"); // Skip if valid cert exists and not near expiry
+                context.Args.Add("--deploy-hook");
+                context.Args.Add("chmod -R 755 /etc/letsencrypt/live && chmod -R 755 /etc/letsencrypt/archive");
+                context.Args.Add("--email");
+                context.Args.Add(letsEncryptEmail.Resource);
+                context.Args.Add("-d");
+                context.Args.Add(domain.Resource);
+            });
+
+        // YARP needs port 80 after certbot completes, so certbot binds 80 during challenge
+        // This requires certbot to run first and exit before YARP starts
+        yarp.WaitForCompletion(certbot);
+
+        yarp.WithHostPort(80);
         yarp.WithHttpsEndpoint(443);
 
+        // Mount the shared letsencrypt volume (read-only for YARP)
+        yarp.WithVolume("letsencrypt", "/etc/letsencrypt", isReadOnly: true);
+
+        // Configure Kestrel to use Let's Encrypt certificates
         yarp.WithEnvironment(context =>
         {
-            context.EnvironmentVariables["Kestrel__Certificates__Default__Path"] = "/app/certs/app.pem";
-            context.EnvironmentVariables["Kestrel__Certificates__Default__KeyPath"] = "/app/certs/app.key";
+            // Certificate paths - domain is interpolated
+            context.EnvironmentVariables["Kestrel__Certificates__Default__Path"] =
+                ReferenceExpression.Create($"/etc/letsencrypt/live/{domain}/fullchain.pem");
+            context.EnvironmentVariables["Kestrel__Certificates__Default__KeyPath"] =
+                ReferenceExpression.Create($"/etc/letsencrypt/live/{domain}/privkey.pem");
 
+            // Configure URLs for both HTTP and HTTPS
             var httpEndpoint = yarp.GetEndpoint("http");
             var httpsEndpoint = yarp.GetEndpoint("https");
 
@@ -72,11 +106,11 @@ if (builder.ExecutionContext.IsPublishMode)
 
             context.EnvironmentVariables["ASPNETCORE_URLS"] = reb.Build();
         });
-
-        yarp.WithBindMount("./certs", "/app/certs");
-
-        // Fix relative path for Docker Compose volume
-        yarp.PublishAsDockerComposeService((svc, infra) => infra.Volumes[0].Source = "./certs");
+    }
+    else
+    {
+        // HTTP only
+        yarp.WithHostPort(80);
     }
 
     yarp.WithExternalHttpEndpoints();
