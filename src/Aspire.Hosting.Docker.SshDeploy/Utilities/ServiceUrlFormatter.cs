@@ -1,3 +1,4 @@
+using Aspire.Hosting.Docker.SshDeploy.Models;
 using Microsoft.Extensions.Configuration;
 
 namespace Aspire.Hosting.Docker.SshDeploy.Utilities;
@@ -23,159 +24,59 @@ internal static class ServiceUrlFormatter
                string.Equals(unsafeShowHost, "1", StringComparison.Ordinal);
     }
 
-    public static string FormatServiceUrlsAsTable(Dictionary<string, List<string>> serviceUrls)
+    /// <summary>
+    /// Formats service information including URLs and status/uptime into an ASCII table.
+    /// </summary>
+    public static string FormatServiceStatusAsTable(ComposeStatus status, Dictionary<string, List<string>> serviceUrls)
     {
-        if (serviceUrls.Count == 0)
+        if (status.Services.Count == 0)
         {
-            return "No exposed ports detected";
+            return "No services detected";
         }
 
-        // Remove duplicates and clean up the data
-        var cleanedServiceUrls = new Dictionary<string, List<string>>();
-        foreach (var (serviceName, urls) in serviceUrls)
-        {
-            var uniqueUrls = urls.Distinct().OrderBy(u => u).ToList();
-            if (uniqueUrls.Count > 0)
-            {
-                cleanedServiceUrls[serviceName] = uniqueUrls;
-            }
-        }
+        // Build service display infos by matching services to their URLs
+        var serviceInfos = status.Services
+            .Select(s => new ServiceInfo(
+                s.Service,
+                serviceUrls.TryGetValue(s.Service, out var urls) ? urls : [],
+                s.Status,
+                s.IsHealthy))
+            .ToList();
 
-        // Remove common prefix from service names if applicable
-        var serviceNames = cleanedServiceUrls.Keys.ToList();
-        var commonPrefix = FindCommonPrefix(serviceNames);
+        // Apply common prefix removal
+        serviceInfos = ApplyPrefixRemoval(serviceInfos);
 
-        // Only remove prefix if it's meaningful (at least 3 characters and applies to multiple services)
-        var displayServiceUrls = cleanedServiceUrls;
-        if (commonPrefix.Length >= 3 && serviceNames.Count > 1)
-        {
-            displayServiceUrls = new Dictionary<string, List<string>>();
-            foreach (var (serviceName, urls) in cleanedServiceUrls)
-            {
-                var displayName = serviceName.StartsWith(commonPrefix)
-                    ? serviceName[commonPrefix.Length..].TrimStart('-', '_', '.')
-                    : serviceName;
-
-                // Ensure we don't end up with empty names
-                if (string.IsNullOrEmpty(displayName))
-                {
-                    displayName = serviceName;
-                }
-
-                displayServiceUrls[displayName] = urls;
-            }
-        }
+        // Calculate column widths
+        var serviceColWidth = Math.Min(Math.Max(15, serviceInfos.Max(s => s.DisplayName.Length)), 25);
+        var statusColWidth = Math.Min(Math.Max(12, serviceInfos.Max(s => s.Status.Length)), 20);
+        var urlColWidth = CalculateUrlColumnWidth(serviceInfos);
 
         var lines = new List<string>();
 
-        // Calculate max widths for better formatting
-        var maxServiceNameWidth = Math.Max(15, displayServiceUrls.Keys.Max(k => k.Length));
+        // Table header
+        lines.Add("\n📋 Service Status:");
+        lines.Add(BuildTableBorder(serviceColWidth, statusColWidth, urlColWidth, BorderType.Top));
+        lines.Add(BuildHeaderRow(serviceColWidth, statusColWidth, urlColWidth));
+        lines.Add(BuildTableBorder(serviceColWidth, statusColWidth, urlColWidth, BorderType.Middle));
 
-        // Calculate max URL width accounting for emoji and formatting
-        var maxUrlContentWidth = 0;
-        foreach (var (serviceName, urls) in displayServiceUrls)
-        {
-            if (urls.Count == 0)
-            {
-                // Account for "⚠️ (no exposed ports)" - emoji + text
-                maxUrlContentWidth = Math.Max(maxUrlContentWidth, "⚠️ (no exposed ports)".Length + 1); // +1 for emoji width
-            }
-            else
-            {
-                foreach (var url in urls)
-                {
-                    // Account for "✅ " prefix on first URL and "   " prefix on subsequent URLs
-                    var formattedLength = url.Length + 3; // 3 spaces for "✅ " or "   " (emoji counts as ~2 chars visually)
-                    maxUrlContentWidth = Math.Max(maxUrlContentWidth, formattedLength);
-                }
-            }
-        }
-
-        // Limit service name column width for readability, ensure URL column accounts for emoji formatting
-        var serviceColWidth = Math.Min(maxServiceNameWidth, 35);
-        var urlColWidth = Math.Max(maxUrlContentWidth, 25);
-
-        // Add table header
-        lines.Add("\n📋 Service URLs:");
-        lines.Add("┌" + new string('─', serviceColWidth + 2) + "┬" + new string('─', urlColWidth + 2) + "┐");
-        lines.Add($"│ {"Service".PadRight(serviceColWidth)} │ {"URL".PadRight(urlColWidth)} │");
-        lines.Add("├" + new string('─', serviceColWidth + 2) + "┼" + new string('─', urlColWidth + 2) + "┤");
-
+        // Table rows
         var hasAnyUrls = false;
-
-        // Add service URLs
-        foreach (var (serviceName, urls) in displayServiceUrls.OrderBy(kvp => kvp.Key))
+        foreach (var info in serviceInfos.OrderBy(s => s.DisplayName))
         {
-            if (urls.Count == 0)
-            {
-                // Service with no exposed URLs
-                var serviceCol = serviceName.Length > serviceColWidth
-                    ? serviceName[..(serviceColWidth - 3)] + "..."
-                    : serviceName.PadRight(serviceColWidth);
-
-                var warningText = "⚠️ (no exposed ports)";
-                var urlCol = warningText.PadRight(urlColWidth - 1); // -1 to account for emoji visual width
-                lines.Add($"│ {serviceCol} │ {urlCol} │");
-            }
-            else
-            {
-                hasAnyUrls = true;
-                // Service with URLs - show service name only on first row
-                for (int i = 0; i < urls.Count; i++)
-                {
-                    var serviceCol = i == 0
-                        ? (serviceName.Length > serviceColWidth
-                            ? serviceName[..(serviceColWidth - 3)] + "..."
-                            : serviceName.PadRight(serviceColWidth))
-                        : "".PadRight(serviceColWidth);
-
-                    var url = urls[i];
-
-                    // Format URL with appropriate icon/spacing
-                    var formattedUrl = i == 0 ? $"✅ {url}" : $"   {url}";
-
-                    // Account for emoji visual width when padding
-                    var paddingAdjustment = i == 0 ? -1 : 0; // -1 for emoji visual width
-                    formattedUrl = formattedUrl.PadRight(urlColWidth + paddingAdjustment);
-
-                    lines.Add($"│ {serviceCol} │ {formattedUrl} │");
-                }
-            }
+            var rows = BuildServiceRows(info, serviceColWidth, statusColWidth, urlColWidth);
+            lines.AddRange(rows);
+            if (info.Urls.Count > 0) hasAnyUrls = true;
         }
 
-        // Add table footer
-        lines.Add("└" + new string('─', serviceColWidth + 2) + "┴" + new string('─', urlColWidth + 2) + "┘");
+        // Table footer
+        lines.Add(BuildTableBorder(serviceColWidth, statusColWidth, urlColWidth, BorderType.Bottom));
 
-        // Add helpful note if there are URLs
         if (hasAnyUrls)
         {
             lines.Add("💡 Click or copy URLs above to access your deployed services!");
         }
 
         return string.Join("\n", lines);
-    }
-
-    private static string FindCommonPrefix(List<string> strings)
-    {
-        if (strings.Count == 0)
-            return "";
-
-        if (strings.Count == 1)
-            return "";
-
-        var prefix = strings[0];
-        for (int i = 1; i < strings.Count; i++)
-        {
-            while (prefix.Length > 0 && !strings[i].StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            {
-                prefix = prefix[..^1];
-            }
-
-            if (prefix.Length == 0)
-                break;
-        }
-
-        return prefix;
     }
 
     /// <summary>
@@ -185,22 +86,144 @@ internal static class ServiceUrlFormatter
         Dictionary<string, List<string>> serviceUrls,
         string? customDomain)
     {
-        var masked = new Dictionary<string, List<string>>();
-        foreach (var (service, urls) in serviceUrls)
-        {
-            masked[service] = urls.Select(url => MaskUrlHost(url, customDomain)).ToList();
-        }
-        return masked;
+        var replacement = string.IsNullOrEmpty(customDomain) ? "***" : customDomain;
+        return serviceUrls.ToDictionary(
+            kvp => kvp.Key,
+            kvp => kvp.Value.Select(url => MaskUrlHost(url, replacement)).ToList());
     }
 
-    private static string MaskUrlHost(string url, string? customDomain)
+    #region Private Types
+
+    private record ServiceInfo(string OriginalName, List<string> Urls, string Status, bool IsHealthy)
+    {
+        public string DisplayName { get; init; } = OriginalName;
+    }
+
+    private enum BorderType { Top, Middle, Bottom }
+
+    #endregion
+
+    #region Table Building Helpers
+
+    private static string BuildTableBorder(int serviceWidth, int statusWidth, int urlWidth, BorderType type)
+    {
+        var (left, mid, right) = type switch
+        {
+            BorderType.Top => ('┌', '┬', '┐'),
+            BorderType.Middle => ('├', '┼', '┤'),
+            BorderType.Bottom => ('└', '┴', '┘'),
+            _ => ('┌', '┬', '┐')
+        };
+        return $"{left}{new string('─', serviceWidth + 2)}{mid}{new string('─', statusWidth + 2)}{mid}{new string('─', urlWidth + 2)}{right}";
+    }
+
+    private static string BuildHeaderRow(int serviceWidth, int statusWidth, int urlWidth)
+    {
+        return $"│ {"Service".PadRight(serviceWidth)} │ {"Status".PadRight(statusWidth)} │ {"URL".PadRight(urlWidth)} │";
+    }
+
+    private static List<string> BuildServiceRows(ServiceInfo info, int serviceWidth, int statusWidth, int urlWidth)
+    {
+        var rows = new List<string>();
+        var serviceCol = TruncateAndPad(info.DisplayName, serviceWidth);
+        var statusCol = TruncateAndPad(info.Status, statusWidth);
+
+        if (info.Urls.Count == 0)
+        {
+            rows.Add($"│ {serviceCol} │ {statusCol} │ {"-".PadRight(urlWidth)} │");
+        }
+        else
+        {
+            for (int i = 0; i < info.Urls.Count; i++)
+            {
+                var svcCol = i == 0 ? serviceCol : "".PadRight(serviceWidth);
+                var stsCol = i == 0 ? statusCol : "".PadRight(statusWidth);
+                var urlCol = TruncateAndPad(info.Urls[i], urlWidth);
+                rows.Add($"│ {svcCol} │ {stsCol} │ {urlCol} │");
+            }
+        }
+
+        return rows;
+    }
+
+    private static string TruncateAndPad(string text, int width)
+    {
+        if (text.Length > width)
+        {
+            return text[..(width - 3)] + "...";
+        }
+        return text.PadRight(width);
+    }
+
+    private static int CalculateUrlColumnWidth(List<ServiceInfo> services)
+    {
+        var maxUrlWidth = 25;
+        foreach (var info in services)
+        {
+            if (info.Urls.Count > 0)
+            {
+                maxUrlWidth = Math.Max(maxUrlWidth, info.Urls.Max(u => u.Length));
+            }
+        }
+        return Math.Min(maxUrlWidth, 40);
+    }
+
+    #endregion
+
+    #region Prefix Removal
+
+    private static List<ServiceInfo> ApplyPrefixRemoval(List<ServiceInfo> services)
+    {
+        var names = services.Select(s => s.OriginalName).ToList();
+        var prefix = FindCommonPrefix(names);
+
+        if (prefix.Length < 3 || names.Count <= 1)
+        {
+            return services;
+        }
+
+        return services.Select(s =>
+        {
+            var displayName = s.OriginalName.StartsWith(prefix)
+                ? s.OriginalName[prefix.Length..].TrimStart('-', '_', '.')
+                : s.OriginalName;
+
+            return string.IsNullOrEmpty(displayName)
+                ? s
+                : s with { DisplayName = displayName };
+        }).ToList();
+    }
+
+    private static string FindCommonPrefix(List<string> strings)
+    {
+        if (strings.Count <= 1)
+            return "";
+
+        var prefix = strings[0];
+        foreach (var str in strings.Skip(1))
+        {
+            while (prefix.Length > 0 && !str.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                prefix = prefix[..^1];
+            }
+            if (prefix.Length == 0) break;
+        }
+
+        return prefix;
+    }
+
+    #endregion
+
+    #region URL Masking
+
+    private static string MaskUrlHost(string url, string replacement)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
         {
             return url;
         }
-
-        var replacement = string.IsNullOrEmpty(customDomain) ? "***" : customDomain;
         return $"{uri.Scheme}://{replacement}:{uri.Port}{uri.PathAndQuery}".TrimEnd('/');
     }
+
+    #endregion
 }

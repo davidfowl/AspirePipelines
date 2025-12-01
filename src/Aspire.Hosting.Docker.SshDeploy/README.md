@@ -90,7 +90,8 @@ To skip prompts, pre-configure via `appsettings.json`:
     "RepositoryPrefix": "your-docker-username"
   },
   "Deployment": {
-    "RemoteDeployPath": "$HOME/aspire/apps/your-app"
+    "RemoteDeployPath": "$HOME/aspire/apps/your-app",
+    "PruneImagesAfterDeploy": "true"
   }
 }
 ```

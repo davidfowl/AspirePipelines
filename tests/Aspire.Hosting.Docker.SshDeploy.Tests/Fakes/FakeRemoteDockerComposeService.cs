@@ -12,9 +12,9 @@ internal class FakeRemoteDockerComposeService : IRemoteDockerComposeService
 {
     private readonly List<ComposeOperation> _operations = new();
     private bool _shouldStopFail;
-    private bool _shouldPullFail;
-    private bool _shouldStartFail;
     private bool _shouldLoginFail;
+    private bool _shouldUpWithPullFail;
+    private bool _shouldPruneFail;
     private string _logsOutput = "";
 
     /// <summary>
@@ -31,27 +31,27 @@ internal class FakeRemoteDockerComposeService : IRemoteDockerComposeService
     }
 
     /// <summary>
-    /// Configures the pull operation to fail.
-    /// </summary>
-    public void ConfigurePullFailure(bool shouldFail = true)
-    {
-        _shouldPullFail = shouldFail;
-    }
-
-    /// <summary>
-    /// Configures the start operation to fail.
-    /// </summary>
-    public void ConfigureStartFailure(bool shouldFail = true)
-    {
-        _shouldStartFail = shouldFail;
-    }
-
-    /// <summary>
     /// Configures the login operation to fail.
     /// </summary>
     public void ConfigureLoginFailure(bool shouldFail = true)
     {
         _shouldLoginFail = shouldFail;
+    }
+
+    /// <summary>
+    /// Configures the up with pull operation to fail.
+    /// </summary>
+    public void ConfigureUpWithPullFailure(bool shouldFail = true)
+    {
+        _shouldUpWithPullFail = shouldFail;
+    }
+
+    /// <summary>
+    /// Configures the prune operation to fail.
+    /// </summary>
+    public void ConfigurePruneFailure(bool shouldFail = true)
+    {
+        _shouldPruneFail = shouldFail;
     }
 
     /// <summary>
@@ -82,26 +82,6 @@ internal class FakeRemoteDockerComposeService : IRemoteDockerComposeService
             Success: true));
     }
 
-    public Task<ComposeOperationResult> PullImagesAsync(string deployPath, CancellationToken cancellationToken)
-    {
-        _operations.Add(new ComposeOperation("Pull", deployPath));
-
-        if (_shouldPullFail)
-        {
-            return Task.FromResult(new ComposeOperationResult(
-                ExitCode: 1,
-                Output: "",
-                Error: "Pull failed (configured to fail)",
-                Success: false));
-        }
-
-        return Task.FromResult(new ComposeOperationResult(
-            ExitCode: 0,
-            Output: "Images pulled",
-            Error: "",
-            Success: true));
-    }
-
     public Task<ComposeOperationResult> LoginToRegistryAsync(string registryUrl, string username, string password, CancellationToken cancellationToken)
     {
         _operations.Add(new ComposeOperation("Login", registryUrl, Username: username));
@@ -122,26 +102,40 @@ internal class FakeRemoteDockerComposeService : IRemoteDockerComposeService
             Success: true));
     }
 
-    public Task<ComposeOperationResult> StartAsync(string deployPath, CancellationToken cancellationToken)
+    public Task<ComposeOperationResult> UpWithPullAsync(string deployPath, CancellationToken cancellationToken)
     {
-        _operations.Add(new ComposeOperation("Start", deployPath));
+        _operations.Add(new ComposeOperation("UpWithPull", deployPath));
 
-        if (_shouldStartFail)
+        if (_shouldUpWithPullFail)
         {
-            throw new InvalidOperationException("Failed to start containers (configured to fail)");
+            throw new InvalidOperationException("Failed to deploy containers (configured to fail)");
         }
 
         return Task.FromResult(new ComposeOperationResult(
             ExitCode: 0,
-            Output: "Containers started",
+            Output: "Containers deployed",
             Error: "",
             Success: true));
     }
 
-    public Task<string> GetLogsAsync(string deployPath, int tailLines, CancellationToken cancellationToken)
+    public Task<ComposeOperationResult> PruneImagesAsync(CancellationToken cancellationToken)
     {
-        _operations.Add(new ComposeOperation("GetLogs", deployPath, tailLines));
-        return Task.FromResult(_logsOutput);
+        _operations.Add(new ComposeOperation("PruneImages", ""));
+
+        if (_shouldPruneFail)
+        {
+            return Task.FromResult(new ComposeOperationResult(
+                ExitCode: 1,
+                Output: "",
+                Error: "Prune failed (configured to fail)",
+                Success: false));
+        }
+
+        return Task.FromResult(new ComposeOperationResult(
+            ExitCode: 0,
+            Output: "Images pruned",
+            Error: "",
+            Success: true));
     }
 
     public Task<string> GetServiceLogsAsync(string containerName, int tailLines, CancellationToken cancellationToken)

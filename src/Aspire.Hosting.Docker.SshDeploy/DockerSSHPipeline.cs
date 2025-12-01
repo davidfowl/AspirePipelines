@@ -51,6 +51,7 @@ internal class DockerSSHPipeline(
     private Dictionary<string, string>? _imageTags;
     private RegistryConfiguration? _registryConfig;
     private string? _dashboardServiceName;
+    private bool _pruneImagesAfterDeploy;
 
     // Properties with null-checking for required state
     private RemoteOperationsFactory RemoteOperationsFactory => _remoteOperationsFactory ?? throw new InvalidOperationException("Remote operations factory not initialized. Ensure SSH connection step has completed.");
@@ -205,7 +206,11 @@ internal class DockerSSHPipeline(
         // Try to load from configuration/state first
         var deploymentSection = _configuration.GetSection("Deployment");
         _remoteDeployPath = deploymentSection["RemoteDeployPath"];
-        
+
+        // Read optional prune setting (defaults to true)
+        var pruneSetting = deploymentSection["PruneImagesAfterDeploy"];
+        _pruneImagesAfterDeploy = string.IsNullOrEmpty(pruneSetting) || !string.Equals(pruneSetting, "false", StringComparison.OrdinalIgnoreCase);
+
         // Expand tilde to $HOME if present
         if (!string.IsNullOrEmpty(_remoteDeployPath))
         {
@@ -495,19 +500,6 @@ internal class DockerSSHPipeline(
     {
         var step = context.ReportingStep;
 
-        // Stop existing containers
-        await using var stopTask = await step.CreateTaskAsync("Stopping existing containers", context.CancellationToken);
-        var stopResult = await RemoteOperationsFactory.DockerComposeService.StopAsync(RemoteDeployPath, context.CancellationToken);
-
-        if (stopResult.Success && !string.IsNullOrEmpty(stopResult.Output))
-        {
-            await stopTask.SucceedAsync($"Existing containers stopped\n{stopResult.Output.Trim()}", context.CancellationToken);
-        }
-        else
-        {
-            await stopTask.SucceedAsync("No containers to stop or stop completed", context.CancellationToken);
-        }
-
         // Authenticate with registry on remote (for private repos)
         if (!string.IsNullOrEmpty(RegistryConfig.RegistryUsername) &&
             !string.IsNullOrEmpty(RegistryConfig.RegistryPassword))
@@ -529,29 +521,41 @@ internal class DockerSSHPipeline(
             await loginTask.SucceedAsync($"Authenticated with {RegistryConfig.RegistryUrl}", context.CancellationToken);
         }
 
-        // Pull latest images
-        await using var pullTask = await step.CreateTaskAsync("Pulling latest images", context.CancellationToken);
-        context.Logger.LogDebug("Pulling latest container images...");
+        // Deploy with minimal downtime using docker compose up --pull always --remove-orphans
+        // This pulls images and recreates only changed containers without explicitly stopping first
+        await using var deployTask = await step.CreateTaskAsync("Deploying containers", context.CancellationToken);
+        context.Logger.LogDebug("Deploying containers with pull...");
 
-        var pullResult = await RemoteOperationsFactory.DockerComposeService.PullImagesAsync(RemoteDeployPath, context.CancellationToken);
+        var deployResult = await RemoteOperationsFactory.DockerComposeService.UpWithPullAsync(RemoteDeployPath, context.CancellationToken);
 
-        if (!string.IsNullOrEmpty(pullResult.Output))
+        if (!string.IsNullOrEmpty(deployResult.Output))
         {
-            await pullTask.SucceedAsync($"Latest images pulled\n{pullResult.Output.Trim()}", context.CancellationToken);
+            await deployTask.SucceedAsync($"Containers deployed\n{deployResult.Output.Trim()}", context.CancellationToken);
         }
         else
         {
-            await pullTask.SucceedAsync("Image pull completed (no output or using local images)", context.CancellationToken);
+            await deployTask.SucceedAsync("Containers deployed successfully", context.CancellationToken);
         }
 
-        // Start services
-        await using var startTask = await step.CreateTaskAsync("Starting new containers", context.CancellationToken);
-        context.Logger.LogDebug("Starting application containers...");
+        // Optionally prune unused images to prevent disk space accumulation
+        if (_pruneImagesAfterDeploy)
+        {
+            await using var pruneTask = await step.CreateTaskAsync("Cleaning up unused images", context.CancellationToken);
+            context.Logger.LogDebug("Pruning unused Docker images...");
 
-        await RemoteOperationsFactory.DockerComposeService.StartAsync(RemoteDeployPath, context.CancellationToken);
-        await startTask.SucceedAsync("New containers started", context.CancellationToken);
+            var pruneResult = await RemoteOperationsFactory.DockerComposeService.PruneImagesAsync(context.CancellationToken);
 
-        await step.SucceedAsync("Containers started successfully");
+            if (pruneResult.Success && !string.IsNullOrEmpty(pruneResult.Output))
+            {
+                await pruneTask.SucceedAsync($"Image cleanup completed\n{pruneResult.Output.Trim()}", context.CancellationToken);
+            }
+            else
+            {
+                await pruneTask.SucceedAsync("Image cleanup completed", context.CancellationToken);
+            }
+        }
+
+        await step.SucceedAsync("Deployment completed successfully");
     }
 
     private async Task HealthCheckStep(PipelineStepContext context)
@@ -606,7 +610,7 @@ internal class DockerSSHPipeline(
             s => s.Service.Contains(DockerComposeEnvironment.Name + "-dashboard", StringComparison.OrdinalIgnoreCase));
         _dashboardServiceName = dashboardService?.Name;
 
-        // Format and log the service URLs table
+        // Format and log the service status table with uptime information
         var serviceUrlsForTable = status.ServiceUrls;
 
         if (!ServiceUrlFormatter.CanShowTargetHost(_configuration, targetHost))
@@ -615,7 +619,7 @@ internal class DockerSSHPipeline(
             serviceUrlsForTable = ServiceUrlFormatter.MaskUrlHosts(serviceUrlsForTable, customDomain: null);
         }
 
-        var serviceTable = ServiceUrlFormatter.FormatServiceUrlsAsTable(serviceUrlsForTable);
+        var serviceTable = ServiceUrlFormatter.FormatServiceStatusAsTable(status, serviceUrlsForTable);
         context.Logger.LogInformation("Services running: {HealthyServices} of {TotalServices} containers healthy.\n{ServiceTable}",
             status.HealthyServices, status.TotalServices, serviceTable);
 

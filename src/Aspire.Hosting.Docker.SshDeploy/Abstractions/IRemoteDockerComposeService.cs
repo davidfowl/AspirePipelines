@@ -16,14 +16,6 @@ internal interface IRemoteDockerComposeService
     Task<ComposeOperationResult> StopAsync(string deployPath, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Pulls the latest images for all services in a Docker Compose deployment.
-    /// </summary>
-    /// <param name="deployPath">Path to the deployment directory containing docker-compose.yaml</param>
-    /// <param name="cancellationToken">Cancellation token</param>
-    /// <returns>Result of the pull operation</returns>
-    Task<ComposeOperationResult> PullImagesAsync(string deployPath, CancellationToken cancellationToken);
-
-    /// <summary>
     /// Authenticates with a container registry on the remote server.
     /// </summary>
     /// <param name="registryUrl">The registry URL (e.g., ghcr.io, docker.io)</param>
@@ -34,21 +26,21 @@ internal interface IRemoteDockerComposeService
     Task<ComposeOperationResult> LoginToRegistryAsync(string registryUrl, string username, string password, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Starts all services in a Docker Compose deployment.
+    /// Deploys services with minimal downtime by running docker compose up with --pull always and --remove-orphans.
+    /// This pulls images and recreates only changed containers without explicitly stopping first.
     /// </summary>
     /// <param name="deployPath">Path to the deployment directory containing docker-compose.yaml</param>
     /// <param name="cancellationToken">Cancellation token</param>
-    /// <returns>Result of the start operation</returns>
-    Task<ComposeOperationResult> StartAsync(string deployPath, CancellationToken cancellationToken);
+    /// <returns>Result of the deploy operation</returns>
+    Task<ComposeOperationResult> UpWithPullAsync(string deployPath, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Gets diagnostic logs from all services in a Docker Compose deployment.
+    /// Prunes unused Docker images to free disk space.
+    /// Should be called after deployments to clean up old images.
     /// </summary>
-    /// <param name="deployPath">Path to the deployment directory containing docker-compose.yaml</param>
-    /// <param name="tailLines">Number of lines to retrieve from the end of the logs</param>
     /// <param name="cancellationToken">Cancellation token</param>
-    /// <returns>The log output</returns>
-    Task<string> GetLogsAsync(string deployPath, int tailLines, CancellationToken cancellationToken);
+    /// <returns>Result of the prune operation</returns>
+    Task<ComposeOperationResult> PruneImagesAsync(CancellationToken cancellationToken);
 
     /// <summary>
     /// Gets diagnostic logs for a specific service/container.

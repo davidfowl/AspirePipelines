@@ -43,26 +43,6 @@ internal class RemoteDockerComposeService : IRemoteDockerComposeService
             Success: result.ExitCode == 0);
     }
 
-    public async Task<ComposeOperationResult> PullImagesAsync(string deployPath, CancellationToken cancellationToken)
-    {
-        _logger.LogDebug("Pulling images in {DeployPath}", deployPath);
-
-        // Use double quotes to allow shell variable expansion (e.g., $HOME)
-        var result = await _sshConnectionManager.ExecuteCommandWithOutputAsync(
-            $"cd \"{deployPath}\" && docker compose pull",
-            cancellationToken);
-
-        _logger.LogDebug(
-            "Pull completed with exit code {ExitCode}",
-            result.ExitCode);
-
-        return new ComposeOperationResult(
-            ExitCode: result.ExitCode,
-            Output: result.Output,
-            Error: result.Error,
-            Success: result.ExitCode == 0);
-    }
-
     public async Task<ComposeOperationResult> LoginToRegistryAsync(
         string registryUrl,
         string username,
@@ -98,27 +78,29 @@ internal class RemoteDockerComposeService : IRemoteDockerComposeService
             Success: result.ExitCode == 0);
     }
 
-    public async Task<ComposeOperationResult> StartAsync(string deployPath, CancellationToken cancellationToken)
+    public async Task<ComposeOperationResult> UpWithPullAsync(string deployPath, CancellationToken cancellationToken)
     {
-        _logger.LogDebug("Starting containers in {DeployPath}", deployPath);
+        _logger.LogDebug("Deploying containers with pull in {DeployPath}", deployPath);
 
-        // Use double quotes to allow shell variable expansion (e.g., $HOME)
+        // Use docker compose up with --pull always and --remove-orphans for minimal downtime deployments.
+        // This pulls images and recreates only changed containers without explicitly stopping first.
+        // --remove-orphans cleans up services that have been removed from compose file.
         var result = await _sshConnectionManager.ExecuteCommandWithOutputAsync(
-            $"cd \"{deployPath}\" && docker compose up -d",
+            $"cd \"{deployPath}\" && docker compose up -d --pull always --remove-orphans",
             cancellationToken);
 
         if (result.ExitCode != 0)
         {
             _logger.LogWarning(
-                "Start failed with exit code {ExitCode}: {Error}",
+                "Deploy failed with exit code {ExitCode}: {Error}",
                 result.ExitCode,
                 result.Error);
 
             throw new InvalidOperationException(
-                $"Failed to start containers: {result.Error}");
+                $"Failed to deploy containers: {result.Error}");
         }
 
-        _logger.LogDebug("Start completed successfully");
+        _logger.LogDebug("Deploy completed successfully");
 
         return new ComposeOperationResult(
             ExitCode: result.ExitCode,
@@ -127,18 +109,23 @@ internal class RemoteDockerComposeService : IRemoteDockerComposeService
             Success: true);
     }
 
-    public async Task<string> GetLogsAsync(string deployPath, int tailLines, CancellationToken cancellationToken)
+    public async Task<ComposeOperationResult> PruneImagesAsync(CancellationToken cancellationToken)
     {
-        _logger.LogDebug("Getting logs from {DeployPath}, tail={TailLines}", deployPath, tailLines);
+        _logger.LogDebug("Pruning unused Docker images");
 
-        // Use double quotes to allow shell variable expansion (e.g., $HOME)
         var result = await _sshConnectionManager.ExecuteCommandWithOutputAsync(
-            $"cd \"{deployPath}\" && docker compose logs --tail={tailLines}",
+            "docker image prune -f",
             cancellationToken);
 
-        _logger.LogDebug("Retrieved {Length} characters of logs", result.Output.Length);
+        _logger.LogDebug(
+            "Prune completed with exit code {ExitCode}",
+            result.ExitCode);
 
-        return result.Output;
+        return new ComposeOperationResult(
+            ExitCode: result.ExitCode,
+            Output: result.Output,
+            Error: result.Error,
+            Success: result.ExitCode == 0);
     }
 
     public async Task<string> GetServiceLogsAsync(string containerName, int tailLines, CancellationToken cancellationToken)

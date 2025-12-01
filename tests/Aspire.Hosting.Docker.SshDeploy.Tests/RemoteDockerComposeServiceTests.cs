@@ -119,26 +119,6 @@ public class RemoteDockerComposeServiceTests
     }
 
     [Fact]
-    public async Task PullImagesAsync_ExecutesDockerComposePull()
-    {
-        // Arrange
-        var fakeSSHManager = new FakeSSHConnectionManager();
-        fakeSSHManager.ConfigureDefaultCommandResult(0, "Pulling images...", "");
-
-        var service = new RemoteDockerComposeService(
-            fakeSSHManager,
-            NullLogger<RemoteDockerComposeService>.Instance);
-
-        // Act
-        var result = await service.PullImagesAsync("$HOME/app", CancellationToken.None);
-
-        // Assert
-        Assert.True(result.Success);
-        var call = fakeSSHManager.Calls.First();
-        Assert.Contains("docker compose pull", call.Detail);
-    }
-
-    [Fact]
     public async Task StopAsync_ExecutesDockerComposeDown()
     {
         // Arrange
@@ -159,31 +139,31 @@ public class RemoteDockerComposeServiceTests
     }
 
     [Fact]
-    public async Task StartAsync_ExecutesDockerComposeUp()
+    public async Task UpWithPullAsync_ExecutesDockerComposeUpWithPullAlways()
     {
         // Arrange
         var fakeSSHManager = new FakeSSHConnectionManager();
-        fakeSSHManager.ConfigureDefaultCommandResult(0, "Started", "");
+        fakeSSHManager.ConfigureDefaultCommandResult(0, "Deployed", "");
 
         var service = new RemoteDockerComposeService(
             fakeSSHManager,
             NullLogger<RemoteDockerComposeService>.Instance);
 
         // Act
-        var result = await service.StartAsync("$HOME/app", CancellationToken.None);
+        var result = await service.UpWithPullAsync("$HOME/app", CancellationToken.None);
 
         // Assert
         Assert.True(result.Success);
         var call = fakeSSHManager.Calls.First();
-        Assert.Contains("docker compose up -d", call.Detail);
+        Assert.Contains("docker compose up -d --pull always --remove-orphans", call.Detail);
     }
 
     [Fact]
-    public async Task StartAsync_ThrowsOnFailure()
+    public async Task UpWithPullAsync_ThrowsOnFailure()
     {
         // Arrange
         var fakeSSHManager = new FakeSSHConnectionManager();
-        fakeSSHManager.ConfigureDefaultCommandResult(1, "", "Container failed to start");
+        fakeSSHManager.ConfigureDefaultCommandResult(1, "", "Failed to pull images");
 
         var service = new RemoteDockerComposeService(
             fakeSSHManager,
@@ -191,8 +171,47 @@ public class RemoteDockerComposeServiceTests
 
         // Act & Assert
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => service.StartAsync("$HOME/app", CancellationToken.None));
+            () => service.UpWithPullAsync("$HOME/app", CancellationToken.None));
 
-        Assert.Contains("Failed to start containers", ex.Message);
+        Assert.Contains("Failed to deploy containers", ex.Message);
+    }
+
+    [Fact]
+    public async Task PruneImagesAsync_ExecutesDockerImagePrune()
+    {
+        // Arrange
+        var fakeSSHManager = new FakeSSHConnectionManager();
+        fakeSSHManager.ConfigureDefaultCommandResult(0, "Deleted images:\ndeleted: sha256:abc123\nTotal reclaimed space: 100MB", "");
+
+        var service = new RemoteDockerComposeService(
+            fakeSSHManager,
+            NullLogger<RemoteDockerComposeService>.Instance);
+
+        // Act
+        var result = await service.PruneImagesAsync(CancellationToken.None);
+
+        // Assert
+        Assert.True(result.Success);
+        var call = fakeSSHManager.Calls.First();
+        Assert.Contains("docker image prune -f", call.Detail);
+    }
+
+    [Fact]
+    public async Task PruneImagesAsync_ReturnsFailureOnError()
+    {
+        // Arrange
+        var fakeSSHManager = new FakeSSHConnectionManager();
+        fakeSSHManager.ConfigureDefaultCommandResult(1, "", "permission denied");
+
+        var service = new RemoteDockerComposeService(
+            fakeSSHManager,
+            NullLogger<RemoteDockerComposeService>.Instance);
+
+        // Act
+        var result = await service.PruneImagesAsync(CancellationToken.None);
+
+        // Assert
+        Assert.False(result.Success);
+        Assert.Equal(1, result.ExitCode);
     }
 }
