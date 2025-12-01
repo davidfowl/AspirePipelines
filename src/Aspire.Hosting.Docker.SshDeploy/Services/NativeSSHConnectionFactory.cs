@@ -2,6 +2,7 @@
 #pragma warning disable ASPIREINTERACTION001
 #pragma warning disable ASPIREPIPELINES002
 
+using System.Runtime.InteropServices;
 using Aspire.Hosting.Docker.SshDeploy.Abstractions;
 using Aspire.Hosting.Docker.SshDeploy.Models;
 using Aspire.Hosting.Pipelines;
@@ -13,8 +14,9 @@ namespace Aspire.Hosting.Docker.SshDeploy.Services;
 
 /// <summary>
 /// Factory for creating native SSH connections that leverage ssh-agent for authentication.
-/// This is the default factory - it uses the system's native ssh command with ControlMaster
-/// for connection reuse, and relies on ssh-agent for key management.
+/// On Unix systems, uses ControlMaster for connection reuse.
+/// On Windows, uses a persistent SSH session with stdin/stdout for command execution
+/// to avoid connection exhaustion (Windows does not support ControlMaster).
 /// </summary>
 internal class NativeSSHConnectionFactory : ISSHConnectionFactory
 {
@@ -55,11 +57,25 @@ internal class NativeSSHConnectionFactory : ISSHConnectionFactory
             configuration,
             cancellationToken);
 
-        // Create and establish connection
-        var manager = new NativeSSHConnectionManager(
-            _processExecutor,
-            _fileSystem,
-            _loggerFactory.CreateLogger<NativeSSHConnectionManager>());
+        // Create appropriate connection manager based on platform
+        // Windows: Use persistent session (no ControlMaster support)
+        // Unix: Use ControlMaster for connection reuse
+        ISSHConnectionManager manager;
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            _logger.LogDebug("Using persistent SSH session (Windows - ControlMaster not supported)");
+            manager = new PersistentSSHConnectionManager(
+                _processExecutor,
+                _loggerFactory.CreateLogger<PersistentSSHConnectionManager>());
+        }
+        else
+        {
+            _logger.LogDebug("Using SSH ControlMaster (Unix)");
+            manager = new NativeSSHConnectionManager(
+                _processExecutor,
+                _fileSystem,
+                _loggerFactory.CreateLogger<NativeSSHConnectionManager>());
+        }
 
         await manager.EstablishConnectionAsync(sshContext, step, cancellationToken);
 

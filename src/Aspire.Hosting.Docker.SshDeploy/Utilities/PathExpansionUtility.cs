@@ -32,7 +32,8 @@ internal static class PathExpansionUtility
         // Expand ~ to home directory
         if (path.StartsWith("~/"))
         {
-            return Path.Combine(homeDir, path[2..]);
+            var relativePath = path[2..].Replace('/', Path.DirectorySeparatorChar);
+            return Path.Combine(homeDir, relativePath);
         }
         if (path == "~")
         {
@@ -42,7 +43,8 @@ internal static class PathExpansionUtility
         // Expand $HOME to home directory
         if (path.StartsWith("$HOME/"))
         {
-            return Path.Combine(homeDir, path[6..]);
+            var relativePath = path[6..].Replace('/', Path.DirectorySeparatorChar);
+            return Path.Combine(homeDir, relativePath);
         }
         if (path == "$HOME")
         {
