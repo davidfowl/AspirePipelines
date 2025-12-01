@@ -17,6 +17,15 @@ namespace Aspire.Hosting.Docker.SshDeploy.Services;
 /// </summary>
 internal class PersistentSSHConnectionManager : ISSHConnectionManager
 {
+    // Timeout constants
+    private const int ReadySignalTimeoutSeconds = 30;
+    private const int DefaultCommandTimeoutSeconds = 120;
+    private const int GracefulExitTimeoutMs = 3000;
+    private const int ServerAliveIntervalSeconds = 30;
+    private const int ServerAliveCountMax = 3;
+
+    private const string ReadyMarker = "___ASPIRE_READY___";
+
     private readonly IProcessExecutor _processExecutor;
     private readonly ILogger<PersistentSSHConnectionManager> _logger;
 
@@ -31,8 +40,6 @@ internal class PersistentSSHConnectionManager : ISSHConnectionManager
     private StreamReader? _stdout;
     private StreamReader? _stderr;
     private readonly SemaphoreSlim _commandLock = new(1, 1);
-
-    private const string ReadyMarker = "___ASPIRE_READY___";
 
     public PersistentSSHConnectionManager(
         IProcessExecutor processExecutor,
@@ -97,7 +104,7 @@ internal class PersistentSSHConnectionManager : ISSHConnectionManager
 
             // Wait for the ready signal
             _logger.LogDebug("Waiting for ready signal from remote bash...");
-            var readyLine = await ReadLineWithTimeoutAsync(TimeSpan.FromSeconds(30), cancellationToken);
+            var readyLine = await ReadLineWithTimeoutAsync(TimeSpan.FromSeconds(ReadySignalTimeoutSeconds), cancellationToken);
             _logger.LogDebug("Got line from remote: '{Line}'", readyLine ?? "(null)");
 
             if (readyLine != ReadyMarker)
@@ -181,7 +188,7 @@ internal class PersistentSSHConnectionManager : ISSHConnectionManager
             int exitCode = 0;
             bool foundStart = false;
 
-            var timeout = TimeSpan.FromSeconds(_connectTimeout > 0 ? _connectTimeout : 120);
+            var timeout = TimeSpan.FromSeconds(_connectTimeout > 0 ? _connectTimeout : DefaultCommandTimeoutSeconds);
 
             // Read lines from stdout until we see the end marker
             while (true)
@@ -299,7 +306,7 @@ internal class PersistentSSHConnectionManager : ISSHConnectionManager
                 }
 
                 // Give the process a moment to exit gracefully
-                var exited = _sshProcess.WaitForExit(3000);
+                var exited = _sshProcess.WaitForExit(GracefulExitTimeoutMs);
                 if (!exited)
                 {
                     _logger.LogDebug("SSH process did not exit gracefully, killing it");
@@ -335,8 +342,8 @@ internal class PersistentSSHConnectionManager : ISSHConnectionManager
         args.Append("-o BatchMode=yes ");                       // No interactive prompts
         args.Append("-o StrictHostKeyChecking=accept-new ");    // Auto-accept new host keys
         args.Append($"-o ConnectTimeout={_connectTimeout} ");   // Connection timeout
-        args.Append("-o ServerAliveInterval=30 ");              // Keep connection alive
-        args.Append("-o ServerAliveCountMax=3 ");               // Allow 3 missed keepalives
+        args.Append($"-o ServerAliveInterval={ServerAliveIntervalSeconds} ");  // Keep connection alive
+        args.Append($"-o ServerAliveCountMax={ServerAliveCountMax} ");        // Allow 3 missed keepalives
         args.Append("-T ");                                     // Disable pseudo-terminal allocation
         args.Append($"-p {_port} ");                            // Port
         args.Append($"{_username}@{_targetHost} ");             // User@host
