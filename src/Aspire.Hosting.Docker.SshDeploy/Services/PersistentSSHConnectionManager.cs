@@ -294,31 +294,38 @@ internal class PersistentSSHConnectionManager : ISSHConnectionManager
     {
         if (_isConnected && _sshProcess != null && !_sshProcess.HasExited)
         {
+            _logger.LogDebug("Closing persistent SSH session");
+
+            // Send exit command to cleanly close the session
             try
             {
-                _logger.LogDebug("Closing persistent SSH session");
-
-                // Send exit command to cleanly close the session
                 if (_stdin != null)
                 {
                     await _stdin.WriteLineAsync("exit");
                     await _stdin.FlushAsync();
                 }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Error sending exit command to SSH session");
+            }
 
-                // Give the process a moment to exit gracefully
+            // Give the process a moment to exit gracefully, then force kill if needed
+            try
+            {
                 var exited = _sshProcess.WaitForExit(GracefulExitTimeoutMs);
                 if (!exited)
                 {
                     _logger.LogDebug("SSH process did not exit gracefully, killing it");
                     _sshProcess.Kill();
                 }
-
-                _logger.LogDebug("Persistent SSH session closed");
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "Error closing persistent SSH session");
+                _logger.LogDebug(ex, "Error waiting for SSH process to exit");
             }
+
+            _logger.LogDebug("Persistent SSH session closed");
         }
 
         CleanupProcess();
@@ -403,22 +410,30 @@ internal class PersistentSSHConnectionManager : ISSHConnectionManager
 
     private void CleanupProcess()
     {
-        try
-        {
-            _stdin?.Dispose();
-            _stdout?.Dispose();
-            _stderr?.Dispose();
-            _sshProcess?.Dispose();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "Error cleaning up SSH process resources");
-        }
+        // Dispose each resource independently to ensure all are cleaned up even if one fails
+        SafeDispose(_stdin, "stdin");
+        SafeDispose(_stdout, "stdout");
+        SafeDispose(_stderr, "stderr");
+        SafeDispose(_sshProcess, "SSH process");
 
         _stdin = null;
         _stdout = null;
         _stderr = null;
         _sshProcess = null;
+    }
+
+    private void SafeDispose(IDisposable? disposable, string resourceName)
+    {
+        if (disposable == null) return;
+
+        try
+        {
+            disposable.Dispose();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Error disposing {ResourceName}", resourceName);
+        }
     }
 
     #endregion
