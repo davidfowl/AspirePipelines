@@ -32,11 +32,7 @@ internal class PersistentSSHConnectionManager : ISSHConnectionManager
     private StreamReader? _stderr;
     private readonly SemaphoreSlim _commandLock = new(1, 1);
 
-    // Unique delimiters for parsing command output
     private const string ReadyMarker = "___ASPIRE_READY___";
-    private const string OutputStartMarker = "___ASPIRE_CMD_START___";
-    private const string OutputEndMarker = "___ASPIRE_CMD_END___";
-    private const string ExitCodeMarker = "___ASPIRE_EXIT_CODE___";
 
     public PersistentSSHConnectionManager(
         IProcessExecutor processExecutor,
@@ -143,7 +139,7 @@ internal class PersistentSSHConnectionManager : ISSHConnectionManager
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to establish persistent SSH session to {Host}", _targetHost);
-            await CleanupProcess();
+            CleanupProcess();
             throw;
         }
     }
@@ -164,32 +160,37 @@ internal class PersistentSSHConnectionManager : ISSHConnectionManager
     {
         EnsureConnected();
 
+        // Only one command can execute at a time over the persistent connection
         await _commandLock.WaitAsync(cancellationToken);
         try
         {
             _logger.LogDebug("Executing SSH command: {Command}", command);
 
-            // Wrap the command with markers so we can parse the output
-            // Format: echo START; <command>; __ec=$?; echo EXIT_CODE$__ec; echo END
-            var wrappedCommand = $"echo {OutputStartMarker}; {command}; __ec=$?; echo {ExitCodeMarker}$__ec; echo {OutputEndMarker}";
+            // Wrap the command with markers so we can parse the output from stdout.
+            // The wrapped format is:
+            //   echo ___ASPIRE_CMD_START___; { <command>; __ec=$?; } 2>&1; echo ___ASPIRE_EXIT_CODE___$__ec; echo ___ASPIRE_CMD_END___
+            // This allows us to:
+            //   1. Know where command output starts (after START marker)
+            //   2. Capture both stdout and stderr (via 2>&1 redirect)
+            //   3. Capture the exit code (from EXIT_CODE marker)
+            //   4. Know when output is complete (END marker)
+            var wrappedCommand = SSHOutputParser.WrapCommand(command);
             await _stdin!.WriteLineAsync(wrappedCommand);
 
-            // Read output until we see the end marker
             var outputBuilder = new StringBuilder();
-            var errorBuilder = new StringBuilder();
             int exitCode = 0;
             bool foundStart = false;
-            bool foundEnd = false;
 
             var timeout = TimeSpan.FromSeconds(_connectTimeout > 0 ? _connectTimeout : 120);
 
-            while (!foundEnd)
+            // Read lines from stdout until we see the end marker
+            while (true)
             {
                 var line = await ReadLineWithTimeoutAsync(timeout, cancellationToken);
 
                 if (line == null)
                 {
-                    // End of stream - connection closed
+                    // End of stream means the SSH connection was closed unexpectedly
                     var stderrContent = await DrainStderrAsync();
                     throw new InvalidOperationException(
                         $"SSH connection closed unexpectedly. Stderr: {stderrContent}");
@@ -197,39 +198,18 @@ internal class PersistentSSHConnectionManager : ISSHConnectionManager
 
                 _logger.LogTrace("SSH output line: {Line}", line);
 
-                if (line == OutputStartMarker)
+                // ProcessLine handles the marker parsing and returns true when END marker is found
+                if (SSHOutputParser.ProcessLine(line, ref foundStart, ref exitCode, outputBuilder))
                 {
-                    foundStart = true;
-                    continue;
-                }
-
-                if (line == OutputEndMarker)
-                {
-                    foundEnd = true;
-                    continue;
-                }
-
-                if (line.StartsWith(ExitCodeMarker))
-                {
-                    if (int.TryParse(line.Substring(ExitCodeMarker.Length), out var ec))
-                    {
-                        exitCode = ec;
-                    }
-                    continue;
-                }
-
-                if (foundStart && !foundEnd)
-                {
-                    outputBuilder.AppendLine(line);
+                    break;
                 }
             }
 
             var output = outputBuilder.ToString().TrimEnd('\r', '\n');
-            var error = errorBuilder.ToString().TrimEnd('\r', '\n');
 
             _logger.LogDebug("SSH command completed with exit code {ExitCode}", exitCode);
 
-            return (exitCode, output, error);
+            return (exitCode, output, string.Empty);
         }
         finally
         {
@@ -239,16 +219,11 @@ internal class PersistentSSHConnectionManager : ISSHConnectionManager
 
     private async Task<string?> ReadLineWithTimeoutAsync(TimeSpan timeout, CancellationToken cancellationToken)
     {
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(timeout);
-
         try
         {
-            // Use Task.Run to make ReadLineAsync cancellable
-            var readTask = Task.Run(async () => await _stdout!.ReadLineAsync(), timeoutCts.Token);
-            return await readTask.WaitAsync(timeout, timeoutCts.Token);
+            return await _stdout!.ReadLineAsync(cancellationToken).AsTask().WaitAsync(timeout, cancellationToken);
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (TimeoutException)
         {
             throw new TimeoutException($"Read operation timed out after {timeout.TotalSeconds} seconds");
         }
@@ -339,7 +314,7 @@ internal class PersistentSSHConnectionManager : ISSHConnectionManager
             }
         }
 
-        await CleanupProcess();
+        CleanupProcess();
         _isConnected = false;
     }
 
@@ -419,7 +394,7 @@ internal class PersistentSSHConnectionManager : ISSHConnectionManager
         return result.Output.Trim();
     }
 
-    private Task CleanupProcess()
+    private void CleanupProcess()
     {
         try
         {
@@ -437,8 +412,6 @@ internal class PersistentSSHConnectionManager : ISSHConnectionManager
         _stdout = null;
         _stderr = null;
         _sshProcess = null;
-
-        return Task.CompletedTask;
     }
 
     #endregion
