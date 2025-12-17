@@ -1,4 +1,5 @@
-#pragma warning disable ASPIRECOMPUTE001 // WithDeploymentImageTag is experimental
+#pragma warning disable ASPIREPIPELINES003 // WithDeploymentImageTag is experimental
+#pragma warning disable ASPIRECOMPUTE003 // ContainerRegistryResource is experimental
 
 // =============================================================================
 // Sample: SSH Deployment to Remote Docker Host
@@ -8,6 +9,7 @@
 // host via SSH with the following features:
 //
 // - Custom image tagging from CI/CD pipelines
+// - Container registry integration with automatic login
 // - YARP reverse proxy as the public entry point
 // - Optional HTTPS with automatic Let's Encrypt certificate generation
 //
@@ -16,9 +18,22 @@
 // - EnableHttps: Set to "true" to enable HTTPS with Let's Encrypt certificates.
 //                When false (default), only HTTP on port 80 is exposed.
 //
+// Required parameters for deployment:
+// - Parameters__registry-endpoint: Registry URL (e.g., "registry.digitalocean.com")
+// - Parameters__registry-repository: Repository prefix (e.g., "my-project")
+// - Parameters__registry-username: Registry username
+// - Parameters__registry-password: Registry password (secret)
+//
 // Required parameters when EnableHttps=true:
 // - Parameters__domain: The domain name for the certificate (e.g., "example.com")
 // - Parameters__letsencrypt_email: Email for Let's Encrypt registration/notifications
+//
+// How container registry integration works:
+// -----------------------------------------
+// 1. A ContainerRegistryResource is created with endpoint and repository
+// 2. WithCredentialsLogin adds a login step that runs before push-prereq
+// 3. Built-in push steps (push-apiservice, push-webfrontend) push to the registry
+// 4. Remote deployment authenticates with the same credentials to pull images
 //
 // How HTTPS works:
 // ----------------
@@ -43,10 +58,24 @@ var builder = DistributedApplication.CreateBuilder(args);
 // Custom image tag from CI/CD (e.g., IMAGE_TAG_SUFFIX=build.42.abc1234)
 var imageTag = builder.Configuration["IMAGE_TAG_SUFFIX"];
 
+// Container registry configuration for push/pull operations
+// These parameters are prompted during deployment or can be set via config
+var registryEndpoint = builder.AddParameter("registry-endpoint");
+var registryRepository = builder.AddParameter("registry-repository");
+
+// var registryUsername = builder.AddParameter("registry-username");
+// var registryPassword = builder.AddParameter("registry-password", secret: true);
+
+// Create container registry with automatic login
+// This creates a login-to-registry step that runs before built-in push steps
+var registry = builder.AddContainerRegistry("registry", registryEndpoint, registryRepository);
+    // .WithCredentialsLogin(registryUsername, registryPassword);
+
 // Configure Docker Compose environment with SSH deployment support
 builder.AddDockerComposeEnvironment("env")
     .WithDashboard(db => db.WithHostPort(8085))
-    .WithSshDeploySupport();
+    .WithSshDeploySupport()
+    .WithContainerRegistry(registry);
 
 var p = builder.AddParameter("p");
 
@@ -73,9 +102,9 @@ var yarp = builder.AddYarp("gateway")
 // Apply the image tag to all services if specified
 if (!string.IsNullOrEmpty(imageTag))
 {
-    apiService.WithDeploymentImageTag(_ => imageTag);
-    frontend.WithDeploymentImageTag(_ => imageTag);
-    yarp.WithDeploymentImageTag(_ => imageTag);
+    apiService.WithImagePushOptions(c => c.Options.RemoteImageTag = imageTag);
+    frontend.WithImagePushOptions(c => c.Options.RemoteImageTag = imageTag);
+    yarp.WithImagePushOptions(c => c.Options.RemoteImageTag = imageTag);
 }
 
 if (builder.ExecutionContext.IsPublishMode)

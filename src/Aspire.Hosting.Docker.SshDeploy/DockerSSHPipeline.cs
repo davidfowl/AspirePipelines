@@ -1,6 +1,7 @@
 #pragma warning disable ASPIREPIPELINES001
 #pragma warning disable ASPIREINTERACTION001
 #pragma warning disable ASPIREPIPELINES002
+#pragma warning disable ASPIREPIPELINES003
 #pragma warning disable ASPIREPIPELINES004
 #pragma warning disable ASPIRECOMPUTE001
 
@@ -16,15 +17,11 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Aspire.Hosting.Pipelines;
 using Aspire.Hosting.Docker;
-using RegistryConfiguration = Aspire.Hosting.Docker.SshDeploy.Services.RegistryConfiguration;
-
 internal class DockerSSHPipeline(
     DockerComposeEnvironmentResource dockerComposeEnvironmentResource,
     DockerCommandExecutor dockerCommandExecutor,
-    EnvironmentFileReader environmentFileReader,
     IPipelineOutputService pipelineOutputService,
     ISSHConnectionFactory sshConnectionFactory,
-    DockerRegistryService dockerRegistryService,
     GitHubActionsGeneratorService gitHubActionsGeneratorService,
     ISshKeyDiscoveryService sshKeyDiscoveryService,
     IProcessExecutor processExecutor,
@@ -33,9 +30,7 @@ internal class DockerSSHPipeline(
     ILoggerFactory loggerFactory) : IAsyncDisposable
 {
     private readonly DockerCommandExecutor _dockerCommandExecutor = dockerCommandExecutor;
-    private readonly EnvironmentFileReader _environmentFileReader = environmentFileReader;
     private readonly ISSHConnectionFactory _sshConnectionFactory = sshConnectionFactory;
-    private readonly DockerRegistryService _dockerRegistryService = dockerRegistryService;
     private readonly GitHubActionsGeneratorService _gitHubActionsGeneratorService = gitHubActionsGeneratorService;
     private readonly ISshKeyDiscoveryService _sshKeyDiscoveryService = sshKeyDiscoveryService;
     private readonly IProcessExecutor _processExecutor = processExecutor;
@@ -48,16 +43,12 @@ internal class DockerSSHPipeline(
     private ISSHConnectionManager? _sshConnectionManager;
     private RemoteOperationsFactory? _remoteOperationsFactory;
     private string? _remoteDeployPath;
-    private Dictionary<string, string>? _imageTags;
-    private RegistryConfiguration? _registryConfig;
     private string? _dashboardServiceName;
     private bool _pruneImagesAfterDeploy;
 
     // Properties with null-checking for required state
     private RemoteOperationsFactory RemoteOperationsFactory => _remoteOperationsFactory ?? throw new InvalidOperationException("Remote operations factory not initialized. Ensure SSH connection step has completed.");
     private string RemoteDeployPath => _remoteDeployPath ?? throw new InvalidOperationException("Remote deploy path not initialized. Ensure SSH connection step has completed.");
-    private Dictionary<string, string> ImageTags => _imageTags ?? throw new InvalidOperationException("Image tags not initialized. Ensure push images step has completed.");
-    private RegistryConfiguration RegistryConfig => _registryConfig ?? throw new InvalidOperationException("Registry configuration not initialized. Ensure configure registry step has completed.");
 
     public DockerComposeEnvironmentResource DockerComposeEnvironment { get; } = dockerComposeEnvironmentResource;
 
@@ -73,13 +64,9 @@ internal class DockerSSHPipeline(
         var prereqs = new PipelineStep { Name = $"ssh-prereq-{DockerComposeEnvironment.Name}", Action = CheckPrerequisitesConcurrently };
         prereqs.RequiredBy(WellKnownPipelineSteps.BuildPrereq);
 
-        // Establish SSH connection and gather SSH credentials (runs in parallel with registry config)
+        // Establish SSH connection and gather SSH credentials
         var establishSsh = new PipelineStep { Name = $"establish-ssh-{DockerComposeEnvironment.Name}", Action = EstablishSSHConnectionStep };
         establishSsh.RequiredBy(WellKnownPipelineSteps.BuildPrereq);
-
-        // Gather registry configuration (runs in parallel with SSH)
-        var configureRegistry = new PipelineStep { Name = $"configure-registry-{DockerComposeEnvironment.Name}", Action = ConfigureRegistryStep };
-        configureRegistry.RequiredBy(WellKnownPipelineSteps.BuildPrereq);
 
         // Configure deployment path (depends on SSH being established)
         var configureDeployment = new PipelineStep { Name = $"configure-deployment-{DockerComposeEnvironment.Name}", Action = ConfigureDeploymentStep };
@@ -90,18 +77,19 @@ internal class DockerSSHPipeline(
         var prepareRemote = new PipelineStep { Name = $"prepare-remote-{DockerComposeEnvironment.Name}", Action = PrepareRemoteEnvironmentStep };
         prepareRemote.DependsOn(configureDeployment);
 
-        // Push images (depends on prepare step which builds images, registry config, and remote being ready)
-        var pushImages = new PipelineStep { Name = $"push-images-{DockerComposeEnvironment.Name}", Action = PushImagesStep, DependsOnSteps = [$"prepare-{DockerComposeEnvironment.Name}"] };
-        pushImages.DependsOn(configureRegistry);
-        pushImages.DependsOn(prepareRemote); // Don't push until we know remote is ready
+        // Transfer environment file (depends on prepare-env completing and push completing)
+        // The .env file already has correct registry-qualified image names from prepare-env
+        var transferEnv = new PipelineStep
+        {
+            Name = $"transfer-environment-{DockerComposeEnvironment.Name}",
+            Action = TransferEnvironmentFileStep,
+            DependsOnSteps = [$"prepare-{DockerComposeEnvironment.Name}", WellKnownPipelineSteps.Push]
+        };
+        transferEnv.DependsOn(prepareRemote);
 
-        // Merge environment file (depends on both prepare and push completing)
-        var mergeEnv = new PipelineStep { Name = $"merge-environment-{DockerComposeEnvironment.Name}", Action = MergeEnvironmentFileStep, DependsOnSteps = [$"prepare-{DockerComposeEnvironment.Name}"] };
-        mergeEnv.DependsOn(pushImages);
-
-        // Transfer files (depends on environment being merged)
+        // Transfer files (depends on environment file being transferred)
         var transferFiles = new PipelineStep { Name = $"transfer-files-{DockerComposeEnvironment.Name}", Action = TransferDeploymentFilesPipelineStep };
-        transferFiles.DependsOn(mergeEnv);
+        transferFiles.DependsOn(transferEnv);
 
         // Transfer extra files configured via WithFileTransfer (depends on core files being transferred)
         var transferExtraFiles = new PipelineStep { Name = $"transfer-extra-files-{DockerComposeEnvironment.Name}", Action = TransferExtraFilesStep };
@@ -138,7 +126,7 @@ internal class DockerSSHPipeline(
         teardown.DependsOn(establishSsh);
         teardown.DependsOn(configureDeployment);
 
-        return [prereqs, establishSsh, configureRegistry, configureDeployment, prepareRemote, pushImages, mergeEnv, transferFiles, transferExtraFiles, deploy, healthCheck, extractDashboardToken, cleanup, deploySshStep, generateGitHubWorkflow, teardown];
+        return [prereqs, establishSsh, configureDeployment, prepareRemote, transferEnv, transferFiles, transferExtraFiles, deploy, healthCheck, extractDashboardToken, cleanup, deploySshStep, generateGitHubWorkflow, teardown];
     }
 
     public Task ConfigurePipelineAsync(PipelineConfigurationContext context)
@@ -191,7 +179,6 @@ internal class DockerSSHPipeline(
         _remoteOperationsFactory = new RemoteOperationsFactory(
             _sshConnectionManager,
             _processExecutor,
-            _environmentFileReader,
             _loggerFactory);
 
         // Note: Success message already reported by SSHConnectionManager
@@ -275,59 +262,91 @@ internal class DockerSSHPipeline(
         await step.SucceedAsync($"Deployment configured: {_remoteDeployPath}");
     }
 
-    private async Task ConfigureRegistryStep(PipelineStepContext context)
+    /// <summary>
+    /// Transfers the environment file to the remote server.
+    /// The .env file already has correct registry-qualified image names from prepare-env.
+    /// </summary>
+    private async Task TransferEnvironmentFileStep(PipelineStepContext context)
     {
         var step = context.ReportingStep;
-        _registryConfig = await _dockerRegistryService.ConfigureRegistryAsync(context, step, context.CancellationToken);
-        await step.SucceedAsync("Registry configured");
-    }
+        var cancellationToken = context.CancellationToken;
 
-    private async Task PushImagesStep(PipelineStepContext context)
-    {
-        // Gather custom image tags from resource annotations
-        var customImageTags = await GetCustomImageTagsAsync(context);
+        var envFilePath = Path.Combine(OutputPath, $".env.{_hostEnvironment.EnvironmentName}");
+        if (!File.Exists(envFilePath))
+        {
+            throw new InvalidOperationException($".env.{_hostEnvironment.EnvironmentName} file not found at {envFilePath}. Ensure prepare-{DockerComposeEnvironment.Name} step has run.");
+        }
 
-        _imageTags = await _dockerRegistryService.TagAndPushImagesAsync(
-            RegistryConfig,
-            OutputPath,
-            _hostEnvironment.EnvironmentName,
-            customImageTags,
-            context.ReportingStep,
-            context.CancellationToken);
+        await using var transferTask = await step.CreateTaskAsync("Transferring environment file", cancellationToken);
+
+        var remoteEnvPath = $"{RemoteDeployPath}/.env";
+        context.Logger.LogDebug("Transferring {LocalPath} to {RemotePath}", envFilePath, remoteEnvPath);
+
+        await _sshConnectionManager!.TransferFileAsync(envFilePath, remoteEnvPath, cancellationToken);
+
+        await transferTask.SucceedAsync($"Environment file transferred to {remoteEnvPath}", cancellationToken);
+        await step.SucceedAsync("Environment file transferred");
     }
 
     /// <summary>
-    /// Gathers custom image tags from DeploymentImageTagCallbackAnnotation on compute resources.
+    /// Authenticates with the container registry on the remote server (for pulling images).
     /// </summary>
-    private async Task<Dictionary<string, string>?> GetCustomImageTagsAsync(PipelineStepContext context)
+    private async Task AuthenticateRemoteWithRegistryAsync(PipelineStepContext context, IReportingStep step)
     {
-        Dictionary<string, string>? customTags = null;
-
-        // Only iterate over compute resources (projects, containers, etc.)
-        foreach (var resource in context.Model.GetComputeResources())
+        // Get the registry from the environment
+        IContainerRegistry? registry = null;
+        if (DockerComposeEnvironment.TryGetLastAnnotation<ContainerRegistryReferenceAnnotation>(out var registryRef))
         {
-            // Check if the resource has a DeploymentImageTagCallbackAnnotation
-            if (resource.TryGetLastAnnotation<DeploymentImageTagCallbackAnnotation>(out var annotation))
-            {
-                var callbackContext = new DeploymentImageTagCallbackAnnotationContext
-                {
-                    Resource = resource,
-                    CancellationToken = context.CancellationToken
-                };
-
-                var tag = await annotation.Callback(callbackContext);
-
-                // Only add if tag is not null or empty
-                if (!string.IsNullOrEmpty(tag))
-                {
-                    customTags ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                    customTags[resource.Name.ToLowerInvariant()] = tag;
-                    context.Logger.LogDebug("Using custom image tag '{Tag}' for resource '{Resource}'", tag, resource.Name);
-                }
-            }
+            registry = registryRef.Registry;
         }
 
-        return customTags;
+        if (registry == null)
+        {
+            context.Logger.LogDebug("No container registry attached, skipping remote authentication");
+            return;
+        }
+
+        // Get registry endpoint
+        var registryEndpoint = await registry.Endpoint.GetValueAsync(context.CancellationToken);
+        if (string.IsNullOrEmpty(registryEndpoint))
+        {
+            context.Logger.LogDebug("Registry endpoint is empty (local registry), skipping remote authentication");
+            return;
+        }
+
+        // Try to get credentials from the registry resource's annotations
+        string? username = null;
+        string? password = null;
+
+        if (registry is IResource registryResource &&
+            registryResource.TryGetLastAnnotation<ContainerRegistryCredentialsAnnotation>(out var credentials))
+        {
+            // Parameters can hold literal values or be prompted during deployment
+            username = await credentials.Username.GetValueAsync(context.CancellationToken);
+            password = await credentials.Password.GetValueAsync(context.CancellationToken);
+        }
+
+        if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password))
+        {
+            context.Logger.LogDebug("No credentials found for registry, skipping remote authentication");
+            return;
+        }
+
+        await using var loginTask = await step.CreateTaskAsync("Authenticating with registry on remote", context.CancellationToken);
+        context.Logger.LogDebug("Logging into {RegistryUrl} on remote server...", registryEndpoint);
+
+        var loginResult = await RemoteOperationsFactory.DockerComposeService.LoginToRegistryAsync(
+            registryEndpoint,
+            username,
+            password,
+            context.CancellationToken);
+
+        if (!loginResult.Success)
+        {
+            throw new InvalidOperationException($"Failed to authenticate with {registryEndpoint} on remote server: {loginResult.Error}");
+        }
+
+        await loginTask.SucceedAsync($"Authenticated with {registryEndpoint}", context.CancellationToken);
     }
 
     private async Task PrepareRemoteEnvironmentStep(PipelineStepContext context)
@@ -358,36 +377,6 @@ internal class DockerSSHPipeline(
             deploymentState.ExistingContainerCount);
 
         await step.SucceedAsync("Remote environment ready for deployment");
-    }
-
-    private async Task MergeEnvironmentFileStep(PipelineStepContext context)
-    {
-        var step = context.ReportingStep;
-
-        if (string.IsNullOrEmpty(OutputPath))
-        {
-            throw new InvalidOperationException("Output path is not set.");
-        }
-
-        // Read the environment-specific .env file generated by prepare-env step
-        var envFilePath = Path.Combine(OutputPath, $".env.{_hostEnvironment.EnvironmentName}");
-        if (!File.Exists(envFilePath))
-        {
-            throw new InvalidOperationException($".env.{_hostEnvironment.EnvironmentName} file not found at {envFilePath}. Ensure prepare-{DockerComposeEnvironment.Name} step has run.");
-        }
-
-        await using var envFileTask = await step.CreateTaskAsync("Creating and transferring environment file", context.CancellationToken);
-
-        var deploymentResult = await RemoteOperationsFactory.EnvironmentService.DeployEnvironmentAsync(
-            envFilePath,
-            RemoteDeployPath,
-            ImageTags,
-            context.CancellationToken);
-
-        context.Logger.LogDebug("Processed {Count} environment variables", deploymentResult.VariableCount);
-
-        await envFileTask.SucceedAsync($"Environment file transferred to {deploymentResult.RemoteEnvPath}", context.CancellationToken);
-        await step.SucceedAsync($"Environment configuration finalized with {deploymentResult.VariableCount} variables");
     }
 
     private async Task TransferDeploymentFilesPipelineStep(PipelineStepContext context)
@@ -501,25 +490,8 @@ internal class DockerSSHPipeline(
         var step = context.ReportingStep;
 
         // Authenticate with registry on remote (for private repos)
-        if (!string.IsNullOrEmpty(RegistryConfig.RegistryUsername) &&
-            !string.IsNullOrEmpty(RegistryConfig.RegistryPassword))
-        {
-            await using var loginTask = await step.CreateTaskAsync("Authenticating with registry on remote", context.CancellationToken);
-            context.Logger.LogDebug("Logging into {RegistryUrl} on remote server...", RegistryConfig.RegistryUrl);
-
-            var loginResult = await RemoteOperationsFactory.DockerComposeService.LoginToRegistryAsync(
-                RegistryConfig.RegistryUrl,
-                RegistryConfig.RegistryUsername,
-                RegistryConfig.RegistryPassword,
-                context.CancellationToken);
-
-            if (!loginResult.Success)
-            {
-                throw new InvalidOperationException($"Failed to authenticate with {RegistryConfig.RegistryUrl} on remote server: {loginResult.Error}");
-            }
-
-            await loginTask.SucceedAsync($"Authenticated with {RegistryConfig.RegistryUrl}", context.CancellationToken);
-        }
+        // Get registry info from the ContainerRegistryResource attached to the environment
+        await AuthenticateRemoteWithRegistryAsync(context, step);
 
         // Deploy with minimal downtime using docker compose up --pull always --remove-orphans
         // This pulls images and recreates only changed containers without explicitly stopping first

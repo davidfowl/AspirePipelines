@@ -11,25 +11,21 @@ internal class RemoteOperationsFactory
 {
     private readonly ISSHConnectionManager _sshConnectionManager;
     private readonly IProcessExecutor _processExecutor;
-    private readonly EnvironmentFileReader _environmentFileReader;
     private readonly ILoggerFactory _loggerFactory;
 
     // Cached service instances
     private IRemoteFileService? _fileService;
     private IRemoteDockerEnvironmentService? _dockerEnvironmentService;
     private IRemoteDockerComposeService? _dockerComposeService;
-    private IRemoteEnvironmentService? _environmentService;
     private IRemoteServiceInspectionService? _serviceInspectionService;
 
     public RemoteOperationsFactory(
         ISSHConnectionManager sshConnectionManager,
         IProcessExecutor processExecutor,
-        EnvironmentFileReader environmentFileReader,
         ILoggerFactory loggerFactory)
     {
         _sshConnectionManager = sshConnectionManager;
         _processExecutor = processExecutor;
-        _environmentFileReader = environmentFileReader;
         _loggerFactory = loggerFactory;
     }
 
@@ -46,9 +42,6 @@ internal class RemoteOperationsFactory
 
     public IRemoteDockerComposeService DockerComposeService =>
         _dockerComposeService ??= new RemoteDockerComposeService(_sshConnectionManager, _loggerFactory.CreateLogger<RemoteDockerComposeService>());
-
-    public IRemoteEnvironmentService EnvironmentService =>
-        _environmentService ??= new RemoteEnvironmentService(_sshConnectionManager, _environmentFileReader, _loggerFactory.CreateLogger<RemoteEnvironmentService>());
 
     public IRemoteServiceInspectionService ServiceInspectionService =>
         _serviceInspectionService ??= new RemoteServiceInspectionService(_sshConnectionManager, _loggerFactory.CreateLogger<RemoteServiceInspectionService>());

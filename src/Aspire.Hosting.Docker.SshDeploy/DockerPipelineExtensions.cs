@@ -69,9 +69,7 @@ public static class DockerPipelineExtensions
         resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<IProcessExecutor, ProcessExecutor>();
         resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<IFileSystem, FileSystemAdapter>();
         resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<DockerCommandExecutor>();
-        resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<EnvironmentFileReader>();
         resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<SSHConfigurationDiscovery>();
-        resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<DockerRegistryService>();
         resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<GitHubActionsGeneratorService>();
         resourceBuilder.ApplicationBuilder.Services.TryAddSingleton<ISshKeyDiscoveryService, SshKeyDiscoveryService>();
 
@@ -99,10 +97,8 @@ public static class DockerPipelineExtensions
             (sp, key) => new DockerSSHPipeline(
                 (DockerComposeEnvironmentResource)key,
                 sp.GetRequiredService<DockerCommandExecutor>(),
-                sp.GetRequiredService<EnvironmentFileReader>(),
                 sp.GetRequiredService<IPipelineOutputService>(),
                 sp.GetRequiredService<ISSHConnectionFactory>(),
-                sp.GetRequiredService<DockerRegistryService>(),
                 sp.GetRequiredService<GitHubActionsGeneratorService>(),
                 sp.GetRequiredService<ISshKeyDiscoveryService>(),
                 sp.GetRequiredService<IProcessExecutor>(),
