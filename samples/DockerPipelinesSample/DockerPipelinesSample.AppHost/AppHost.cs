@@ -63,13 +63,13 @@ var imageTag = builder.Configuration["IMAGE_TAG_SUFFIX"];
 var registryEndpoint = builder.AddParameter("registry-endpoint");
 var registryRepository = builder.AddParameter("registry-repository");
 
-// var registryUsername = builder.AddParameter("registry-username");
-// var registryPassword = builder.AddParameter("registry-password", secret: true);
+var registryUsername = builder.AddParameter("registry-username");
+var registryPassword = builder.AddParameter("registry-password", secret: true);
 
 // Create container registry with automatic login
 // This creates a login-to-registry step that runs before built-in push steps
-var registry = builder.AddContainerRegistry("registry", registryEndpoint, registryRepository);
-    // .WithCredentialsLogin(registryUsername, registryPassword);
+var registry = builder.AddContainerRegistry("registry", registryEndpoint, registryRepository)
+    .WithCredentialsLogin(registryUsername, registryPassword);
 
 // Configure Docker Compose environment with SSH deployment support
 builder.AddDockerComposeEnvironment("env")
