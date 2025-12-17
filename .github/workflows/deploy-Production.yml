@@ -39,10 +39,10 @@ jobs:
         env:
           DockerSSH__TargetHost: ${{ secrets.TARGET_HOST }}
           DockerSSH__SshUsername: ${{ secrets.SSH_USERNAME }}
-          DockerRegistry__RegistryUrl: ghcr.io
-          DockerRegistry__RepositoryPrefix: ${{ github.repository }}
-          DockerRegistry__RegistryUsername: ${{ github.actor }}
-          DockerRegistry__RegistryPassword: ${{ secrets.GITHUB_TOKEN }}
+          Parameters__registry-endpoint: ghcr.io
+          Parameters__registry-repository: ${{ github.repository }}
+          Parameters__registry-username: ${{ github.actor }}
+          Parameters__registry-password: ${{ secrets.GITHUB_TOKEN }}
           IMAGE_TAG_SUFFIX: build.${{ github.run_number }}.${{ env.SHORT_SHA }}
           Parameters__p: ${{ vars.PARAMETERS_P }}
           Parameters__cache-password: ${{ secrets.PARAMETERS_CACHE_PASSWORD }}

@@ -22,8 +22,20 @@ dotnet add package Aspire.Hosting.Docker.SshDeploy --prerelease
 3. Add SSH deployment support to your AppHost:
 
 ```csharp
+// Container registry parameters (prompted during deployment or set via config)
+var registryEndpoint = builder.AddParameter("registry-endpoint");
+var registryRepository = builder.AddParameter("registry-repository");
+var registryUsername = builder.AddParameter("registry-username");
+var registryPassword = builder.AddParameter("registry-password", secret: true);
+
+// Create container registry with automatic login
+var registry = builder.AddContainerRegistry("registry", registryEndpoint, registryRepository)
+    .WithCredentialsLogin(registryUsername, registryPassword);
+
+// Configure Docker Compose environment with SSH deployment
 builder.AddDockerComposeEnvironment("env")
-    .WithSshDeploySupport();
+    .WithSshDeploySupport()
+    .WithContainerRegistry(registry);
 ```
 
 4. Deploy:
@@ -32,7 +44,7 @@ builder.AddDockerComposeEnvironment("env")
 aspire deploy
 ```
 
-The pipeline will prompt for SSH credentials, registry configuration, and deploy path.
+The pipeline will prompt for SSH credentials, registry parameters, and deploy path.
 
 ## File Transfer
 
@@ -85,9 +97,11 @@ To skip prompts, pre-configure via `appsettings.json`:
     "SshPort": "22",
     "SshKeyPath": "~/.ssh/id_rsa"
   },
-  "DockerRegistry": {
-    "RegistryUrl": "docker.io",
-    "RepositoryPrefix": "your-docker-username"
+  "Parameters": {
+    "registry-endpoint": "docker.io",
+    "registry-repository": "your-docker-username",
+    "registry-username": "your-username",
+    "registry-password": "your-password-or-token"
   },
   "Deployment": {
     "RemoteDeployPath": "$HOME/aspire/apps/your-app",
@@ -137,7 +151,10 @@ The `SshKeyPath` supports tilde and `$HOME` expansion:
 export DockerSSH__TargetHost=your-server.com
 export DockerSSH__SshUsername=your-username
 export DockerSSH__SshKeyPath=~/.ssh/id_ed25519
-export DockerRegistry__RegistryUrl=ghcr.io
+export Parameters__registry-endpoint=ghcr.io
+export Parameters__registry-repository=your-org/your-repo
+export Parameters__registry-username=your-username
+export Parameters__registry-password=your-token
 ```
 
 ### Target Host Privacy
@@ -220,8 +237,10 @@ env:
   DockerSSH__TargetHost: ${{ vars.TARGET_HOST }}
   DockerSSH__SshUsername: ${{ secrets.SSH_USERNAME }}
   DockerSSH__SshKeyPath: ${{ github.workspace }}/.ssh/id_rsa
-  DockerRegistry__RegistryUrl: ghcr.io
-  DockerRegistry__RepositoryPrefix: ${{ github.repository_owner }}
+  Parameters__registry-endpoint: ghcr.io
+  Parameters__registry-repository: ${{ github.repository }}
+  Parameters__registry-username: ${{ github.actor }}
+  Parameters__registry-password: ${{ secrets.GITHUB_TOKEN }}
 ```
 
 ## Teardown
