@@ -37,6 +37,7 @@ jobs:
       - name: Deploy
         run: aspire deploy -e Production
         env:
+          ASPIRE_CONSOLE_WIDTH: 160
           DockerSSH__TargetHost: ${{ secrets.TARGET_HOST }}
           DockerSSH__SshUsername: ${{ secrets.SSH_USERNAME }}
           Parameters__registry_endpoint: ghcr.io
