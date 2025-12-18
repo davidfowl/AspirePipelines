@@ -35,7 +35,7 @@ jobs:
         run: echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
 
       - name: Deploy
-        run: aspire deploy -e Production --log-level debug
+        run: aspire deploy -e Production
         env:
           DockerSSH__TargetHost: ${{ secrets.TARGET_HOST }}
           DockerSSH__SshUsername: ${{ secrets.SSH_USERNAME }}
