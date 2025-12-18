@@ -13,6 +13,41 @@ flowchart LR
     A[Dev Machine / CI<br/>aspire deploy] -->|SSH| B[Target Server<br/>docker compose up]
 ```
 
+## How It Works
+
+The deployment pipeline executes in phases, with steps running in parallel where possible:
+
+```mermaid
+flowchart TD
+    subgraph Configure
+        A[Establish SSH] --> B[Configure Deployment]
+        C[Process Parameters] --> D[Build Prerequisites]
+    end
+
+    subgraph Build & Push
+        D --> E[Build Images]
+        E --> F[Push to Registry]
+    end
+
+    subgraph Deploy
+        F --> G[Prepare Compose Files]
+        G --> H[Transfer Files via SCP]
+        H --> I[docker compose up]
+        I --> J[Health Checks]
+    end
+
+    J --> K[Done]
+```
+
+**Phase breakdown:**
+1. **Configure** - Establish SSH connection, gather parameters (registry, credentials, deploy path)
+2. **Build** - Build container images for each project in parallel
+3. **Push** - Push images to the configured container registry
+4. **Deploy** - Transfer compose files and `.env` to the remote server, run `docker compose up`
+5. **Verify** - Run health checks, extract dashboard token, cleanup SSH
+
+Run `aspire do diagnostics` to see the full dependency graph for your application.
+
 ## Quick Start
 
 1. Add the package feed:

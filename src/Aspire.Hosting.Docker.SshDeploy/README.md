@@ -19,110 +19,140 @@ aspire add docker-sshdeploy
 dotnet add package Aspire.Hosting.Docker.SshDeploy --prerelease
 ```
 
-3. Add SSH deployment support to your AppHost:
+## Usage Scenarios
+
+### 1. Interactive Mode (Simplest)
+
+Just add SSH deploy support and run `aspire deploy`. You'll be prompted for everything:
 
 ```csharp
-// Container registry parameters (prompted during deployment or set via config)
-var registryEndpoint = builder.AddParameter("registry-endpoint");
-var registryRepository = builder.AddParameter("registry-repository");
-var registryUsername = builder.AddParameter("registry-username");
-var registryPassword = builder.AddParameter("registry-password", secret: true);
+var builder = DistributedApplication.CreateBuilder(args);
 
-// Create container registry with automatic login
-var registry = builder.AddContainerRegistry("registry", registryEndpoint, registryRepository)
-    .WithCredentialsLogin(registryUsername, registryPassword);
-
-// Configure Docker Compose environment with SSH deployment
 builder.AddDockerComposeEnvironment("env")
-    .WithSshDeploySupport()
-    .WithContainerRegistry(registry);
-```
+    .WithSshDeploySupport();
 
-4. Deploy:
+builder.Build().Run();
+```
 
 ```bash
 aspire deploy
 ```
 
-The pipeline will prompt for SSH credentials, registry parameters, and deploy path.
+The pipeline prompts for:
+- Registry URL (e.g., `docker.io`, `ghcr.io`)
+- Repository prefix (e.g., `myusername` or `myorg/myrepo`)
+- SSH target host
+- SSH credentials
 
-## File Transfer
+No explicit registry login is performed - docker uses whatever credentials it already has.
 
-Transfer additional files (certificates, configs, etc.) to the remote server.
+---
 
-### App Files (relative to deploy path)
+### 2. Pre-configured Registry (No Prompts)
 
-Use `WithAppFileTransfer` to transfer files to a subdirectory within the deployment path:
+Configure the registry via environment variables or `appsettings.json` to skip prompts:
 
 ```csharp
 builder.AddDockerComposeEnvironment("env")
-    .WithSshDeploySupport()
-    .WithAppFileTransfer("./certs", "certs");  // ./certs → {RemoteDeployPath}/certs
+    .WithSshDeploySupport();
 ```
 
-### Absolute Paths
-
-Use `WithFileTransfer` for full control over the remote destination:
-
-```csharp
-var certDir = builder.AddParameter("certDir");  // e.g., "$HOME/certs"
-
-builder.AddDockerComposeEnvironment("env")
-    .WithSshDeploySupport()
-    .WithFileTransfer("./certs", certDir);  // ./certs → $HOME/certs
+**Environment variables:**
+```bash
+export DockerRegistry__RegistryUrl=docker.io
+export DockerRegistry__RepositoryPrefix=myusername
 ```
 
-Or with a string literal:
-```csharp
-.WithFileTransfer("./certs", "$HOME/certs")
-```
-
-Multiple file transfers can be chained:
-```csharp
-builder.AddDockerComposeEnvironment("env")
-    .WithSshDeploySupport()
-    .WithAppFileTransfer("./config", "config")
-    .WithFileTransfer("./certs", certDir);
-```
-
-## Configuration (Optional)
-
-To skip prompts, pre-configure via `appsettings.json`:
-
+**Or appsettings.json:**
 ```json
 {
-  "DockerSSH": {
-    "TargetHost": "your-server.com",
-    "SshUsername": "your-username",
-    "SshPort": "22",
-    "SshKeyPath": "~/.ssh/id_rsa"
-  },
-  "Parameters": {
-    "registry-endpoint": "docker.io",
-    "registry-repository": "your-docker-username",
-    "registry-username": "your-username",
-    "registry-password": "your-password-or-token"
-  },
-  "Deployment": {
-    "RemoteDeployPath": "$HOME/aspire/apps/your-app",
-    "PruneImagesAfterDeploy": "true"
+  "DockerRegistry": {
+    "RegistryUrl": "docker.io",
+    "RepositoryPrefix": "myusername"
   }
 }
 ```
 
-### SSH Key Path
+This assumes you're already logged in to the registry (e.g., via `docker login`).
 
-The `SshKeyPath` supports tilde and `$HOME` expansion:
+---
 
-```json
-"SshKeyPath": "~/.ssh/id_ed25519"
-"SshKeyPath": "$HOME/.ssh/id_rsa"
-"SshKeyPath": "/Users/john/.ssh/id_rsa"
+### 3. With Registry Credentials
+
+Add username and password to perform explicit `docker login` before pushing:
+
+```csharp
+builder.AddDockerComposeEnvironment("env")
+    .WithSshDeploySupport();
 ```
 
-### SSH Authentication
+**Environment variables:**
+```bash
+export DockerRegistry__RegistryUrl=ghcr.io
+export DockerRegistry__RepositoryPrefix=myorg/myrepo
+export DockerRegistry__RegistryUsername=myusername
+export DockerRegistry__RegistryPassword=ghp_xxxxxxxxxxxx
+```
 
-**Key-based (recommended):**
+**Or appsettings.json:**
+```json
+{
+  "DockerRegistry": {
+    "RegistryUrl": "ghcr.io",
+    "RepositoryPrefix": "myorg/myrepo",
+    "RegistryUsername": "myusername",
+    "RegistryPassword": "ghp_xxxxxxxxxxxx"
+  }
+}
+```
+
+When both username and password are configured, the pipeline logs in to the registry before pushing images.
+
+---
+
+### 4. Custom Registry Resource (Full Control)
+
+For complete control, define your own container registry resource:
+
+```csharp
+var registry = builder.AddContainerRegistry("my-registry", "ghcr.io", "myorg/myrepo");
+
+// Option A: Already logged in (no credentials needed)
+builder.AddDockerComposeEnvironment("env")
+    .WithContainerRegistry(registry)
+    .WithSshDeploySupport();
+```
+
+```csharp
+// Option B: With explicit credentials
+var username = builder.AddParameter("registry-username");
+var password = builder.AddParameter("registry-password", secret: true);
+
+var registry = builder.AddContainerRegistry("my-registry", "ghcr.io", "myorg/myrepo")
+    .WithCredentialsLogin(username, password);
+
+builder.AddDockerComposeEnvironment("env")
+    .WithContainerRegistry(registry)
+    .WithSshDeploySupport();
+```
+
+When you specify your own registry via `WithContainerRegistry()`, the built-in default registry is not used.
+
+---
+
+## SSH Configuration
+
+### Environment Variables
+
+```bash
+export DockerSSH__TargetHost=your-server.com
+export DockerSSH__SshUsername=deploy
+export DockerSSH__SshKeyPath=~/.ssh/id_ed25519
+```
+
+### appsettings.json
+
+**Key-based authentication (recommended):**
 ```json
 {
   "DockerSSH": {
@@ -134,7 +164,7 @@ The `SshKeyPath` supports tilde and `$HOME` expansion:
 }
 ```
 
-**Password-based:**
+**Password-based authentication:**
 ```json
 {
   "DockerSSH": {
@@ -145,131 +175,160 @@ The `SshKeyPath` supports tilde and `$HOME` expansion:
 }
 ```
 
-### Environment Variables
-
-```bash
-export DockerSSH__TargetHost=your-server.com
-export DockerSSH__SshUsername=your-username
-export DockerSSH__SshKeyPath=~/.ssh/id_ed25519
-export Parameters__registry-endpoint=ghcr.io
-export Parameters__registry-repository=your-org/your-repo
-export Parameters__registry-username=your-username
-export Parameters__registry-password=your-token
+The `SshKeyPath` supports tilde and `$HOME` expansion:
+```
+~/.ssh/id_ed25519
+$HOME/.ssh/id_rsa
+/Users/john/.ssh/id_rsa
 ```
 
 ### Target Host Privacy
 
-The target host is treated as sensitive and masked in output by default.
-
-To show the target host:
+The target host is masked in output by default. To show it:
 ```bash
 export UNSAFE_SHOW_TARGET_HOST=true
 ```
 
-## CI/CD with GitHub Actions
+---
 
-Generate a GitHub Actions workflow that deploys on every push to `main`:
+## File Transfer
 
-```bash
-aspire do gh-action-{environment-name}
+Transfer additional files (certificates, configs, etc.) to the remote server.
+
+### Relative to Deploy Path
+
+```csharp
+builder.AddDockerComposeEnvironment("env")
+    .WithSshDeploySupport()
+    .WithAppFileTransfer("./certs", "certs");  // ./certs → {RemoteDeployPath}/certs
 ```
 
-For example, if your Docker Compose environment is named `env`:
+### Absolute Path
+
+```csharp
+builder.AddDockerComposeEnvironment("env")
+    .WithSshDeploySupport()
+    .WithFileTransfer("./certs", "$HOME/certs");
+```
+
+Or with a parameter:
+```csharp
+var certDir = builder.AddParameter("certDir");
+
+builder.AddDockerComposeEnvironment("env")
+    .WithSshDeploySupport()
+    .WithFileTransfer("./certs", certDir);
+```
+
+---
+
+### 5. GitHub Actions with GHCR
+
+Use GitHub Container Registry with the built-in `GITHUB_TOKEN`:
+
+```csharp
+builder.AddDockerComposeEnvironment("env")
+    .WithSshDeploySupport();
+```
+
+**Environment variables (in workflow):**
+```yaml
+env:
+  DockerSSH__TargetHost: ${{ secrets.TARGET_HOST }}
+  DockerSSH__SshUsername: ${{ secrets.SSH_USERNAME }}
+  DockerRegistry__RegistryUrl: ghcr.io
+  DockerRegistry__RepositoryPrefix: ${{ github.repository }}
+  DockerRegistry__RegistryUsername: ${{ github.actor }}
+  DockerRegistry__RegistryPassword: ${{ secrets.GITHUB_TOKEN }}
+```
+
+**Required secrets:** `SSH_PRIVATE_KEY`, `SSH_USERNAME`, `TARGET_HOST`
+
+The `GITHUB_TOKEN` is automatically available with `packages:write` permission.
+
+---
+
+## CI/CD with GitHub Actions
+
+### Generate Workflow Automatically
 
 ```bash
 aspire do gh-action-env
 ```
 
-This command:
-1. Creates a GitHub environment with your deployment settings
-2. Stores SSH credentials and parameters as GitHub secrets/variables
-3. Generates a workflow file (`.github/workflows/deploy-{name}.yml`)
-
-### Prerequisites
-
-- GitHub CLI (`gh`) installed and authenticated (`gh auth login`)
-- Current directory is a GitHub repository with a remote
-
-### What Gets Created
-
-**GitHub Environment** with:
-- `TARGET_HOST` (variable) - Your server hostname/IP
-- `SSH_USERNAME` (secret) - SSH username
-- `SSH_PRIVATE_KEY` (secret) - SSH private key contents (for key auth)
-- `SSH_PASSWORD` (secret) - SSH password (for password auth)
-- `SSH_KEY_PASSPHRASE` (secret) - Key passphrase (if applicable)
-- Any application parameters defined in your AppHost
-
-**Workflow File** that:
-- Triggers on push to `main` and manual dispatch
-- Uses GitHub Container Registry (`ghcr.io`)
-- Handles SSH authentication automatically
-- Runs `aspire deploy` with environment variables
+This creates a GitHub environment with secrets and generates `.github/workflows/deploy-env.yml`.
 
 ### Multiple Environments
-
-Deploy to different environments (staging, production, etc.) by using the `-e` flag:
 
 ```bash
 aspire do gh-action-env -e staging
 aspire do gh-action-env -e production
 ```
 
-This creates separate GitHub environments and workflow files for each:
-- `.github/workflows/deploy-env-staging.yml`
-- `.github/workflows/deploy-env-production.yml`
-
-Each workflow runs `aspire deploy -e {environment}`, allowing your AppHost to customize behavior per environment.
-
-### Re-running the Command
-
-Running `aspire do gh-action-{name}` again will:
-1. Detect existing secrets/variables
-2. Prompt whether to overwrite existing values
-3. Update only what you choose to change
-
-### Generated Workflow
-
-The workflow uses environment variables to configure the deployment:
-
-```yaml
-env:
-  DockerSSH__TargetHost: ${{ vars.TARGET_HOST }}
-  DockerSSH__SshUsername: ${{ secrets.SSH_USERNAME }}
-  DockerSSH__SshKeyPath: ${{ github.workspace }}/.ssh/id_rsa
-  Parameters__registry-endpoint: ghcr.io
-  Parameters__registry-repository: ${{ github.repository }}
-  Parameters__registry-username: ${{ github.actor }}
-  Parameters__registry-password: ${{ secrets.GITHUB_TOKEN }}
-```
+---
 
 ## Teardown
 
-Tear down a deployed environment by stopping and removing all containers:
-
-```bash
-aspire do teardown-{resource-name}
-```
-
-For example, if your Docker Compose environment is named `env`:
+Stop and remove all containers:
 
 ```bash
 aspire do teardown-env
 ```
 
-This command:
-1. Connects to the remote server via SSH
-2. Shows all running containers and their status
-3. Prompts for confirmation before proceeding
-4. Runs `docker compose down` to stop and remove containers
+This connects via SSH, shows running containers, and runs `docker compose down` after confirmation.
 
-This is great for ephemeral environments like feature branch deployments, PR previews, or temporary staging environments that need to be cleaned up after use.
+---
 
-### Configuration
+## Example Workflow
 
-The teardown command uses the same SSH and deployment configuration as `aspire deploy`. It will prompt for credentials if not already configured.
+A complete GitHub Actions workflow for deploying to a remote server:
 
-To skip prompts, ensure your `appsettings.json` or environment variables are set (see [Configuration](#configuration-optional)).
+```yaml
+name: Deploy
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: Production
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install Aspire CLI
+        run: curl -sSL https://aspire.dev/install.sh | bash
+
+      - name: Setup SSH agent
+        uses: webfactory/ssh-agent@v0.9.1
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Add known hosts
+        run: ssh-keyscan -H ${{ secrets.TARGET_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Deploy
+        run: aspire deploy -e Production
+        env:
+          DockerSSH__TargetHost: ${{ secrets.TARGET_HOST }}
+          DockerSSH__SshUsername: ${{ secrets.SSH_USERNAME }}
+          DockerRegistry__RegistryUrl: ghcr.io
+          DockerRegistry__RepositoryPrefix: ${{ github.repository }}
+          DockerRegistry__RegistryUsername: ${{ github.actor }}
+          DockerRegistry__RegistryPassword: ${{ secrets.GITHUB_TOKEN }}
+```
+
+---
 
 ## Links
 

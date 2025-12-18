@@ -131,14 +131,26 @@ internal class DockerSSHPipeline(
 
     public Task ConfigurePipelineAsync(PipelineConfigurationContext context)
     {
-        var dockerComposeUpStep = context.Steps.FirstOrDefault(s => s.Name == $"docker-compose-up-{DockerComposeEnvironment.Name}");
+        var dockerComposeUpStepName = $"docker-compose-up-{DockerComposeEnvironment.Name}";
+        var sshDeployStepName = $"deploy-docker-ssh-{DockerComposeEnvironment.Name}";
+
+        var dockerComposeUpStep = context.Steps.FirstOrDefault(s => s.Name == dockerComposeUpStepName);
         var deployStep = context.Steps.FirstOrDefault(s => s.Name == WellKnownPipelineSteps.Deploy);
         var prepareStep = context.Steps.FirstOrDefault(s => s.Name == $"prepare-{DockerComposeEnvironment.Name}");
 
-        // Remove docker compose up from the deployment pipeline
-        // not needed for SSH deployment
-        deployStep?.DependsOnSteps.Remove($"docker-compose-up-{DockerComposeEnvironment.Name}");
+        // Remove docker compose up from the deployment pipeline - not needed for SSH deployment
+        deployStep?.DependsOnSteps.Remove(dockerComposeUpStepName);
         dockerComposeUpStep?.RequiredBySteps.Remove(WellKnownPipelineSteps.Deploy);
+        dockerComposeUpStep?.DependsOnSteps.Clear();
+        dockerComposeUpStep?.RequiredBySteps.Clear();
+
+        // Remove print-summary steps from the deploy graph - they're for local output only
+        foreach (var step in context.Steps.Where(s => s.Tags.Contains("print-summary")))
+        {
+            step.DependsOnSteps.Clear();
+            step.RequiredBySteps.Clear();
+            deployStep?.DependsOnSteps.Remove(step.Name);
+        }
 
         // Make the built-in prepare step depend on our prerequisites check
         // This ensures Docker is available before building images
